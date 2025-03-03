@@ -1,0 +1,12 @@
+#!/bin/bash
+# Fluentd音声文字起こしシステム実行スクリプト
+
+# 現在の作業ディレクトリをシステムディレクトリに変更
+cd <%= BASE_DIR %>
+
+# Python仮想環境を有効化
+source myenv/bin/activate
+
+# Fluentdを起動
+echo "Fluentd音声文字起こしシステムを起動しています..."
+bundle exec fluentd -c <%= File.join(BASE_DIR, "fluentd.conf") %>

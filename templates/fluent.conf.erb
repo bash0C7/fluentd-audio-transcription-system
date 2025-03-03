@@ -1,0 +1,75 @@
+# Fluentd音声文字起こしシステムの設定ファイル
+# 1. 音声録音 → 2. 音声変換 → 3. 文字起こし → 4. ファイル出力
+
+# 1. 音声録音プラグイン
+<source>
+  @type audio_recorder
+  tag audio.raw
+  
+  # 録音デバイス設定
+  device 0
+  
+  # 無音検出設定
+  silence_duration 1.0
+  noise_level -30
+  min_duration 2
+  max_duration 900
+  
+  # 音声設定
+  audio_codec aac
+  audio_bitrate 192k
+  audio_sample_rate 44100
+  audio_channels 1
+  
+  # バッファ設定
+  buffer_path <%= File.join(BUFFER_DIR, "audio_recorder") %>
+  recording_interval 0
+</source>
+
+# 2. 音声変換プラグイン
+<filter audio.raw>
+  @type audio_transcoder
+  
+  # 変換設定
+  transcode_options -c:v copy -af loudnorm=I=-16:TP=-1.5:print_format=summary
+  
+  # 出力フォーマット
+  output_extension mp3
+  
+  # バッファ設定
+  buffer_path <%= File.join(BUFFER_DIR, "audio_transcoder") %>
+</filter>
+
+# 3. 文字起こしプラグイン
+<filter audio.raw>
+  @type audio_transcriber
+  
+  # MLX Whisper設定
+  model mlx-community/whisper-large-v3-turbo
+  language ja
+  
+  # 文字起こし初期プロンプト
+  initial_prompt これは日本語のビジネス会議や技術的な議論の文字起こしです。敬語表現、専門用語、固有名詞を正確に認識してください。
+</filter>
+
+# 4. ファイル出力プラグイン
+<match audio.raw>
+  @type file
+  
+  # 出力先設定
+  path <%= File.join(LOG_DIR, "audio_transcription") %>
+  append true
+  
+  # 出力形式設定
+  <format>
+    @type json
+  </format>
+  
+  # バッファ設定
+  <buffer>
+    @type file
+    path <%= File.join(BUFFER_DIR, "out_file") %>
+    flush_mode interval
+    flush_interval 5s
+  </buffer>
+</match>
