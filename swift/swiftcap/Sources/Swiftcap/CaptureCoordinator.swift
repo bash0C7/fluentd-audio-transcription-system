@@ -16,6 +16,7 @@ actor CaptureCoordinator {
     private var rotateTask: Task<Void, Never>?
     private let micEngine = AVAudioEngine()
     private var screenStream: SCStream?
+    private static let targetFormat: AVAudioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
 
     init(spoolDir: URL) {
         self.spoolDir = spoolDir
@@ -33,6 +34,10 @@ actor CaptureCoordinator {
                                                             quickWriter: quickWriter,
                                                             finalWriter: finalWriter)
             try recorders[ch]?.start()
+        }
+
+        for ch in ["mic", "screen"] {
+            sounds[ch] = try SoundAnalyzerWrapper(channel: ch, writer: soundWriter, format: Self.targetFormat)
         }
 
         try await startMic()
@@ -90,11 +95,10 @@ actor CaptureCoordinator {
     }
 
     private func startMic() async throws {
-        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+        let format = Self.targetFormat
         let input = micEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: inputFormat, to: format)
-        sounds["mic"] = try SoundAnalyzerWrapper(channel: "mic", writer: soundWriter, format: format)
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
             guard let self else { return }
             let outBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameCapacity)!
