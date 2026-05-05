@@ -25,7 +25,7 @@ class TestFilterAudioState < Test::Unit::TestCase
   def test_rotated_event_loads_blob_and_emits_segment
     d = create_driver
     d.run(default_tag: 'audio.state') do
-      d.feed(Time.now.to_f, {
+      d.feed(Fluent::EventTime.now, {
         'ts' => Time.now.to_f,
         'kind' => 'rotated',
         'channel' => 'mic',
@@ -46,7 +46,7 @@ class TestFilterAudioState < Test::Unit::TestCase
   def test_non_rotated_events_are_dropped
     d = create_driver
     d.run(default_tag: 'audio.state') do
-      d.feed(Time.now.to_f, { 'kind' => 'heartbeat' })
+      d.feed(Fluent::EventTime.now, { 'kind' => 'heartbeat' })
     end
     assert_equal 0, d.filtered_records.size
   end
