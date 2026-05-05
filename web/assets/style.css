@@ -1,0 +1,11 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, sans-serif; background: #0e0f12; color: #d8dce0; }
+#app { display: grid; grid-template-columns: 1fr 1fr 1.5fr; height: 100vh; gap: 1px; background: #2a2d33; }
+#app > div { background: #15171c; padding: 12px; overflow: auto; }
+h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: #8a8f99; }
+#quick-stream .line  { color: #aab2c0; padding: 2px 0; opacity: 0.7; }
+#quick-stream .line.live { color: #fff; opacity: 1; }
+#perfect-stream .line { padding: 4px 8px; border-left: 2px solid transparent; margin: 4px 0; }
+#perfect-stream .line.mic    { border-color: #4aa3ff; background: #1a2230; }
+#perfect-stream .line.screen { border-color: #ff8e6b; background: #2a1f1a; }
+#graph-canvas { width: 100%; height: calc(100vh - 60px); }
