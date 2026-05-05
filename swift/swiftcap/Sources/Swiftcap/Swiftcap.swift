@@ -22,6 +22,26 @@ struct Swiftcap {
         signal(SIGHUP, SIG_IGN)
         hupSource.resume()
 
+        let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+        termSource.setEventHandler {
+            Task {
+                await coordinator.rotateAll(reason: "shutdown")
+                exit(0)
+            }
+        }
+        signal(SIGTERM, SIG_IGN)
+        termSource.resume()
+
+        let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+        intSource.setEventHandler {
+            Task {
+                await coordinator.rotateAll(reason: "shutdown")
+                exit(0)
+            }
+        }
+        signal(SIGINT, SIG_IGN)
+        intSource.resume()
+
         let ackReader = AckReader(url: spoolDir.appendingPathComponent("ack.jsonl"))
         Task {
             while true {
