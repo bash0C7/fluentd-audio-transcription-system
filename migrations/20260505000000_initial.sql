@@ -45,6 +45,7 @@ CREATE TABLE sessions (
   title TEXT,
   summary TEXT
 );
+CREATE INDEX idx_sessions_started ON sessions(started_at);
 
 CREATE TABLE transcripts (
   id INTEGER PRIMARY KEY,
@@ -62,7 +63,10 @@ CREATE TABLE transcripts (
 );
 CREATE INDEX idx_transcripts_started ON transcripts(started_at);
 CREATE INDEX idx_transcripts_session ON transcripts(session_id);
+CREATE INDEX idx_transcripts_audio_segment ON transcripts(audio_segment_id);
 
+-- transcripts is write-once: polished_text is set at INSERT time by
+-- filter_foundation_model_mac. No FTS5 sync triggers needed for this MVP.
 CREATE VIRTUAL TABLE transcripts_fts USING fts5(
   raw_text, polished_text,
   content='transcripts', content_rowid='id', tokenize='unicode61'
@@ -77,6 +81,7 @@ CREATE TABLE sound_labels (
   label TEXT NOT NULL,
   confidence REAL NOT NULL
 );
+CREATE INDEX idx_sound_labels_channel_started ON sound_labels(channel, started_at);
 
 CREATE TABLE entities (
   id INTEGER PRIMARY KEY,
