@@ -1,7 +1,7 @@
 // swift/swiftcap/Sources/Swiftcap/SpoolWriter.swift
 import Foundation
 
-final class SpoolWriter {
+final class SpoolWriter: @unchecked Sendable {
     private let url: URL
     private var handle: FileHandle?
     private let queue = DispatchQueue(label: "swiftcap.spoolwriter")
