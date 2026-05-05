@@ -1,127 +1,75 @@
-# Fluentd音声文字起こしシステム
+# fluentd-audio-transcription-system
 
-macOSで動作する会議音声の自動録音・文字起こしシステムです。マイクからの音声を自動的に録音し、音声処理を行った後に文字起こしを行い、結果をファイルに保存します。
+macOS 26+ 上で動く、会議音声の常時キャプチャ・文字起こし・可視化システム。
 
-## システム概要
+## アーキテクチャ概要
 
-このシステムは以下のFluentdプラグインを連携させて動作します：
+```
+swiftcap (Swift CLI)
+  └─ ScreenCaptureKit + AVAudioEngine
+     ├─ CAF/AAC rotating recorder
+     ├─ SpeechAnalyzer/SpeechTranscriber (volatile + final)
+     └─ SNAudioStreamAnalyzer
+  ↓ spool/{quick,final,sound,state}.jsonl + *.caf
+fluentd
+  └─ in_tail × 4 → filter_audio_state / natural_language_mac /
+     foundation_model_mac → out_sqlite_meeting_log
+  ↓ SQLite WAL + ack.jsonl + HTTP webhook
+web (sinatra + faye-websocket + puma)
+  ↓ WebSocket
+Chrome (PicoRuby:wasm + Three.js + 3d-force-graph)
+  ┌──────────┬──────────┬─────────────┐
+  │ Quick    │ Perfect  │ Network     │
+  │ pane     │ pane     │ Graph pane  │
+  └──────────┴──────────┴─────────────┘
+```
 
-1. **fluent-plugin-audio-recorder**: マイク入力から音声を録音
-2. **fluent-plugin-audio-transcoder**: 録音した音声を文字起こしに適した形式に変換
-3. **fluent-plugin-audio-transcriber**: MLX Whisperを使用して音声を文字起こし
-4. **Fluentd標準のout_fileプラグイン**: 文字起こし結果をファイルに保存
+詳細は `docs/superpowers/specs/2026-05-05-fluentd-audio-transcription-v2-design.md` 参照。実装計画は `docs/superpowers/plans/2026-05-05-fluentd-audio-transcription-v2.md` 参照。
 
-## 前提条件
+## 前提
 
-このシステムを使用するには以下のソフトウェアが必要です：
+- macOS 26 (Tahoe) / Apple Silicon ── ランタイム実行に必須
+- macOS 15 (Sequoia) + Xcode CLT 26.x SDK ── ビルド検証だけなら可
+- Swift 6.3+ ([swiftly](https://www.swift.org/install/macos/) 経由推奨)
+- Ruby 4.0.1 (rbenv)
+- ローカル ghq layout で `../rb-natural-language-mac` `../rb-foundation-model-mac` `../swift_gem` が clone 済み
+- Ollama（`gemma4:e2b` 等）が `localhost:11434` で起動（`rb-foundation-model-mac` 仮実装が利用）
 
-- macOS (Apple Siliconプロセッサ推奨)
-- Homebrew
-- FFmpeg
-- pyenv (Python 3.11)
-- rbenv (Ruby 3.4.1)
+## セットアップ
 
-## セットアップ方法
-
-1. リポジトリをクローンする：
 ```bash
-git clone https://github.com/yourusername/fluentd-audio-transcription-system.git
+git clone https://github.com/bash0C7/fluentd-audio-transcription-system
 cd fluentd-audio-transcription-system
+bundle config set --local path vendor/bundle
+bundle install
+bundle exec rake db:migrate
+bundle exec ruby scripts/setup.rb
 ```
 
-2. セットアップスクリプトを実行する：
+初回起動時に macOS から「画面収録」「マイク」「音声認識」の許諾ダイアログが出る。すべて承認。
+
+## 確認
+
+```
+open http://localhost:9292/
+```
+
+Quick / Perfect / Graph の 3 カラムが現れる。実会議や `say -v Kyoko こんにちは` で動作確認。
+
+## 設計上の選択
+
+- 翻訳しない（日本語/英語そのまま）
+- 完璧経路は Apple SpeechAnalyzer + Foundation Models のみ（Strategy P, Whisper 不採用）
+- 話者識別はチャンネルベース（mic = self, screen = remote）
+- DB は SQLite WAL、`_sqlite_mcp_meta` で chiebukuro-mcp 互換
+
+## 開発
+
 ```bash
-ruby setup.rb
-```
-
-3. newsyslogの設定を有効化する（管理者権限が必要）：
-```bash
-sudo cp ~/fluentd-audio-transcription-system/fluentd_newsyslog.conf /etc/newsyslog.d/
-```
-
-4. cronジョブを設定する：
-```bash
-crontab ~/fluentd-audio-transcription-system/crontab
-```
-
-## 使用方法
-
-以下のコマンドで音声文字起こしシステムを起動します：
-
-```bash
-~/fluentd-audio-transcription-system/run.sh
-```
-
-システムが起動すると、マイクからの音声を自動的に録音・文字起こしします。無音が検出されると録音が停止し、文字起こし処理が開始されます。
-
-文字起こし結果は以下の場所に保存されます：
-```
-/Users/[ユーザー名]/Library/Logs/audio_transcription...
-```
-
-## ディレクトリ構造
-
-```
-~/fluentd-audio-transcription-system/
-├── Gemfile                  # Rubyの依存関係
-├── fluentd.conf             # Fluentd設定ファイル
-├── myenv/                   # Python仮想環境
-├── vendor/                  # Bundlerでインストールされたgem
-├── buffer/                  # 各プラグインのバッファディレクトリ
-│   ├── audio_recorder/      # 録音バッファ
-│   ├── audio_transcoder/    # 変換バッファ
-│   ├── audio_transcriber/   # 文字起こしバッファ
-│   └── out_file/            # 出力バッファ
-└── logs/                    # Fluentdのログ
-```
-
-## ログと一時ファイルの管理
-
-ログファイルと一時ファイルは自動的に管理されます：
-
-- **ログローテーション**: newsyslogによって5世代保存
-- **バッファクリーンアップ**: cronジョブによって7日以上経過したファイルを削除
-
-## カスタマイズ
-
-各種設定は以下のファイルで調整できます：
-```
-~/fluentd-audio-transcription-system/fluentd.conf
-```
-
-主な設定項目：
-- マイクデバイス番号
-- 無音検出の閾値と時間
-- 音声フォーマットとビットレート
-- 文字起こしモデル
-- 言語設定
-
-## トラブルシューティング
-
-### マイクデバイスの確認
-
-使用可能なマイクデバイスを確認するには：
-```bash
-ffmpeg -f avfoundation -list_devices true -i ""
-```
-
-### 文字起こしが機能しない場合
-
-Python環境のセットアップが正しく行われているか確認：
-```bash
-cd ~/fluentd-audio-transcription-system
-source myenv/bin/activate
-python -c "import mlx_whisper; print(mlx_whisper.__version__)"
-```
-
-### Fluentdのデバッグ
-
-Fluentdの詳細なログを確認するには：
-```bash
-cd ~/fluentd-audio-transcription-system
-bundle exec fluentd -c fluentd.conf -v
+bundle exec rake test         # Ruby 側ユニットテスト
+cd swift/swiftcap && swift test  # Swift 側ユニットテスト
 ```
 
 ## ライセンス
 
-このプロジェクトはApache License 2.0の下で公開されています。
+Apache 2.0
