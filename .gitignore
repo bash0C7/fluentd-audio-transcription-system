@@ -3,6 +3,7 @@
 /.bundle/
 /Gemfile.lock
 /spool/
+/tmp/
 /.superpowers/
 /db/*.sqlite*
 swift/swiftcap/.build/

@@ -56,6 +56,19 @@ open http://localhost:9292/
 
 Quick / Perfect / Graph の 3 カラムが現れる。実会議や `say -v Kyoko こんにちは` で動作確認。
 
+## マニュアル起動（LaunchAgent 不使用）
+
+開発時や常駐させたくないときは rake で `screen -dmS` セッションとして起動：
+
+```bash
+bundle exec rake start:all      # swiftcap + fluentd + web
+bundle exec rake status         # 動いてるセッションを確認
+bundle exec rake "logs[fluentd]"  # ログを tail （[swiftcap] / [web] も可）
+bundle exec rake stop:all       # 全停止
+```
+
+個別の `start:swiftcap` / `start:fluentd` / `start:web`、停止は対応する `stop:<name>`。spool は `./spool/`、DB は `./db/meeting_log.sqlite`、ログは `./tmp/log/` に出る（すべて gitignored）。
+
 ## 設計上の選択
 
 - 翻訳しない（日本語/英語そのまま）
