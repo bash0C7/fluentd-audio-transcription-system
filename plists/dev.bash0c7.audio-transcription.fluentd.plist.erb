@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key> <string>dev.bash0c7.audio-transcription.fluentd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string><%= bundle_bin %></string>
+    <string>exec</string>
+    <string>fluentd</string>
+    <string>-c</string><string><%= repo_root %>/config/fluent.conf</string>
+    <string>-p</string><string><%= repo_root %>/lib/fluent/plugin</string>
+  </array>
+  <key>WorkingDirectory</key>      <string><%= repo_root %></string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SPOOL_DIR</key>  <string><%= spool_dir %></string>
+    <key>DB_PATH</key>    <string><%= db_path %></string>
+    <key>WEBHOOK_URL</key><string>http://localhost:9292/_internal/notify</string>
+  </dict>
+  <key>RunAtLoad</key>     <true/>
+  <key>KeepAlive</key>     <true/>
+  <key>StandardOutPath</key> <string><%= log_dir %>/fluentd.log</string>
+  <key>StandardErrorPath</key><string><%= log_dir %>/fluentd.err</string>
+</dict>
+</plist>

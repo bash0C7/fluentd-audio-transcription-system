@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key> <string>dev.bash0c7.audio-transcription.web</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string><%= bundle_bin %></string>
+    <string>exec</string><string>puma</string>
+    <string>-C</string><string><%= repo_root %>/web/puma.rb</string>
+    <string><%= repo_root %>/web/config.ru</string>
+  </array>
+  <key>WorkingDirectory</key>      <string><%= repo_root %></string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DB_PATH</key> <string><%= db_path %></string>
+  </dict>
+  <key>RunAtLoad</key>     <true/>
+  <key>KeepAlive</key>     <true/>
+  <key>StandardOutPath</key> <string><%= log_dir %>/web.log</string>
+  <key>StandardErrorPath</key><string><%= log_dir %>/web.err</string>
+</dict>
+</plist>

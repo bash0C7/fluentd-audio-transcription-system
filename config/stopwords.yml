@@ -1,0 +1,45 @@
+# config/stopwords.yml
+ja:
+  - そう
+  - あの
+  - えー
+  - その
+  - これ
+  - それ
+  - あれ
+  - こう
+  - はい
+  - いえ
+  - うん
+  - ね
+  - よ
+  - わ
+en:
+  - the
+  - a
+  - an
+  - is
+  - are
+  - was
+  - were
+  - and
+  - or
+  - but
+  - so
+  - of
+  - in
+  - on
+  - at
+  - to
+  - for
+  - with
+  - that
+  - this
+  - it
+  - its
+  - i
+  - you
+  - he
+  - she
+  - we
+  - they

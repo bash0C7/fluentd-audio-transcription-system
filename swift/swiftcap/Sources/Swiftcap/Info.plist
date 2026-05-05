@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.bash0c7.swiftcap</string>
+    <key>CFBundleName</key>
+    <string>swiftcap</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Captures meeting audio from screen sharing.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Records your microphone for meeting transcription.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>On-device speech recognition for live transcription.</string>
+</dict>
+</plist>
