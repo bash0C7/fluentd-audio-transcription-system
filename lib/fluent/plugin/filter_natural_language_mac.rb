@@ -17,7 +17,7 @@ module Fluent
         super
         data = YAML.load_file(@stopwords_path) || {}
         @stopwords = {}
-        data.each { |lang, words| @stopwords[lang.to_s] = (words || []).map(&:downcase).to_set }
+        data.each { |lang, words| @stopwords[lang.to_s] = (words || []).map { |w| w.to_s.downcase }.to_set }
       end
 
       def filter(_tag, _time, record)
