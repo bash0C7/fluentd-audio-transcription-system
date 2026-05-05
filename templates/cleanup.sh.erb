@@ -1,7 +1,0 @@
-#!/bin/bash
-# バッファファイルクリーンアップスクリプト
-
-# 7日以上経過したバッファファイルを削除
-find <%= BUFFER_DIR %> -type f -mtime +7 -delete
-
-echo "$(date): バッファファイルのクリーンアップを実行しました" >> <%= File.join(BASE_DIR, "logs", "cleanup.log") %>
