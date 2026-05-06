@@ -29,6 +29,7 @@ class TestRakeLifecycle < Test::Unit::TestCase
       trap('TERM') { exit 0 }
       loop { sleep 0.1 }
     ))
+    Process.detach(pid)
     @leftover_pids << pid
     20.times { break if File.exist?(pidfile); sleep 0.1 }
     [pid, pidfile]
@@ -55,6 +56,7 @@ class TestRakeLifecycle < Test::Unit::TestCase
       trap('TERM', 'IGNORE')
       loop { sleep 0.1 }
     ))
+    Process.detach(pid)
     @leftover_pids << pid
     20.times { break if File.exist?(pidfile); sleep 0.1 }
 

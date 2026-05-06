@@ -23,6 +23,50 @@ DB_PATH    = ENV['DB_PATH']   || File.join(REPO_ROOT, 'db', 'meeting_log.sqlite'
 LOG_DIR    = File.join(REPO_ROOT, 'tmp', 'log')
 SWIFTCAP_BIN = File.join(REPO_ROOT, 'swift', 'swiftcap', '.build', 'release', 'swiftcap')
 
+RUN_DIR = File.join(REPO_ROOT, 'tmp', 'run')
+
+# wait_sec table per CLAUDE.md graceful-shutdown discipline
+# (CAF rotation, fluentd buffer flush, puma drain, etc).
+WAIT_SEC = { 'swiftcap' => 30, 'fluentd' => 60, 'web' => 10, 'caffeinate' => 5 }.freeze
+
+def process_alive?(pid)
+  return false if pid.nil? || pid <= 0
+  Process.kill(0, pid)
+  true
+rescue Errno::ESRCH, Errno::EPERM
+  false
+end
+
+# Graceful, single-SIGTERM stop. Reads pidfile, sends TERM, waits up to wait_sec.
+# Aborts (no SIGKILL escalation) if the process refuses to exit — silent SIGKILL
+# during graceful drain costs transcripts.
+def stop_via_pidfile(name, wait_sec, has_screen: true)
+  pidfile = File.join(RUN_DIR, "#{name}.pid")
+  if File.exist?(pidfile)
+    pid = File.read(pidfile).to_i
+    if process_alive?(pid)
+      puts "stopping #{name} (pid=#{pid}), waiting up to #{wait_sec}s for graceful shutdown..."
+      begin
+        Process.kill('TERM', pid)
+      rescue Errno::ESRCH
+        # raced — process already gone
+      end
+      deadline = Time.now + wait_sec
+      sleep(0.2) while process_alive?(pid) && Time.now < deadline
+      if process_alive?(pid)
+        abort "#{name} did not exit within #{wait_sec}s (pid=#{pid}). Investigate — do NOT SIGKILL: graceful drain failure indicates a bug in the service."
+      end
+      puts "stopped: #{name}"
+    else
+      puts "stale pidfile for #{name} (pid=#{pid} not alive)"
+    end
+    File.delete(pidfile) rescue nil
+  else
+    puts "no pidfile: #{name}"
+  end
+  system("screen -X -S audio-#{name} quit > /dev/null 2>&1") if has_screen
+end
+
 namespace :start do
   desc 'Start swiftcap (mic + screen capture daemon) in screen session "audio-swiftcap"'
   task :swiftcap do
