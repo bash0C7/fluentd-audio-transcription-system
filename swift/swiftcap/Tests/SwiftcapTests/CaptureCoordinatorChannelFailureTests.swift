@@ -3,7 +3,9 @@ import Foundation
 import Testing
 @testable import Swiftcap
 
-@available(macOS 26.0, *)
+// Note: @available cannot be applied to @Suite/@Test directly (Swift Testing
+// macro restriction). Each test guards CaptureCoordinator usage with
+// `guard #available(macOS 26.0, *) else { return }` instead.
 @Suite
 struct CaptureCoordinatorChannelFailureTests {
     private func makeTmpDir() -> URL {
@@ -24,6 +26,7 @@ struct CaptureCoordinatorChannelFailureTests {
 
     @Test
     func handleScreenStreamStopped_emitsChannelFailedEvent() async throws {
+        guard #available(macOS 26.0, *) else { return }
         let tmp = makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let coord = CaptureCoordinator(spoolDir: tmp)
@@ -40,6 +43,7 @@ struct CaptureCoordinatorChannelFailureTests {
 
     @Test
     func handleScreenStreamStopped_isIdempotent() async throws {
+        guard #available(macOS 26.0, *) else { return }
         let tmp = makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let coord = CaptureCoordinator(spoolDir: tmp)
@@ -55,6 +59,7 @@ struct CaptureCoordinatorChannelFailureTests {
 
     @Test
     func handleScreenStreamStopped_isNoOpWhenScreenInactive() async throws {
+        guard #available(macOS 26.0, *) else { return }
         let tmp = makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let coord = CaptureCoordinator(spoolDir: tmp)
