@@ -51,8 +51,12 @@ class TestFilterNaturalLanguageMac < Test::Unit::TestCase
     rec = d.filtered_records.first
     assert_kind_of Array, rec['entities']
     texts = rec['entities'].map { |e| e['text'] }
+    # NLTokenizer with word unit segments "議事録" into "議事" + "録",
+    # so we assert on the leading multi-char span rather than the full
+    # compound. Mecab-style morphological analysis is out of scope.
     assert_includes texts, '会議'
-    assert_includes texts, '議事録'
+    assert_includes texts, '議事'
     refute_includes texts, 'の', 'single-char particle should be dropped by length>=2 filter'
+    refute_includes texts, '録', 'single-char fragment should be dropped by length>=2 filter'
   end
 end
