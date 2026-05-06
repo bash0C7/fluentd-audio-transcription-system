@@ -78,4 +78,23 @@ class TestFilterNaturalLanguageMac < Test::Unit::TestCase
     end
     assert_includes texts, 'ありがとう', 'content word must be retained'
   end
+
+  def test_bcp47_locale_language_codes_apply_stopwords
+    prod = File.expand_path('../../../config/stopwords.yml', __FILE__)
+    d = Fluent::Test::Driver::Filter.new(Fluent::Plugin::NaturalLanguageMacFilter)
+      .configure("stopwords_path #{prod}")
+    d.run(default_tag: 'audio.final') do
+      d.feed(Fluent::EventTime.now, {
+        'kind' => 'final',
+        'text' => 'うんちょっとですね、ありがとうござい、ますよね。',
+        'language' => 'ja-JP'
+      })
+    end
+    rec = d.filtered_records.first
+    texts = rec['entities'].map { |e| e['text'] }
+    %w[うん ちょっと です ござい ます].each do |w|
+      refute_includes texts, w, "ja-JP must resolve to ja stopwords (BCP-47 region suffix)"
+    end
+    assert_includes texts, 'ありがとう'
+  end
 end
