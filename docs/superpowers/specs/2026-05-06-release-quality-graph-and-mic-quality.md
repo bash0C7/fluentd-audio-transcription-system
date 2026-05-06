@@ -82,6 +82,21 @@ R3 は既存テスト (mini-E5 5/5、swift test 9/9) を keep する純粋 refac
 | fluentd-audio-transcription-system | `test/fluent/test_filter_natural_language_mac.rb` | 日本語 token 抽出 spec 追加 |
 | fluentd-audio-transcription-system | `swift/swiftcap/Sources/Swiftcap/CaptureCoordinator.swift` | `Self.targetFormat` 廃止、`startMic` AVAudioConverter 削除、`SoundAnalyzerWrapper` per-channel format |
 
+## Verification 結果 (2026-05-07)
+
+- parent `bundle exec rake test`: **34/34 PASS** (新規 `test_extracts_japanese_tokens_via_tokenizer` 含む)
+- swiftcap `swift test`: **9/9 PASS**
+- mini-E5 5x (release binary rebuild 後の `mini-e5-5x-r3c.log`): **4/5 PASS** (run 1 のみ L4 ack-count timing flake、 R3 と無関係の既存 hardening 課題で次バージョン送り)
+- 30s 実会議 (YouTube バックグラウンド + 自分の声、 `realmeeting-30s.log`): SQLite に transcripts 611 (mic 203 + screen 408)、 entities 162、 entity_edges 904 が追記
+- Chrome `localhost:9292` 描画: Perfect ペインに final 200 件、 Graph canvas 1222x863 + edges 500 描画。 sample edge `うん <-> 松田 weight=1`
+
+実装の途中 R3 で `let micFormat = micEngine.inputNode.outputFormat(forBus: 0)` を `start(locale:)` に持ち上げた版が **SCStream -3805 "アプリケーション接続中断" + Swift Task Continuation MISUSE** を引き起こし screen channel が 0-byte 録音となって mini-E5 5/5 fail。 `inputNode` access を `startMic` 内に閉じる fix (commit `e92a84a`) で解消、 v3 と同等の起動順序を保ちつつ二段 convert 廃止の効果も維持した。
+
+## Known limitations / next-version backlog
+
+- top entities が機能語 (うん / です / ない / って / ござい / はい 等) に偏っている。 stopwords 拡充または形態素解析 gem 採用が次バージョンの graph 質改善ルート
+- mini-E5 run 1 で稀に L4 ack-count timing flake (fluentd readiness の初期化遅延)、 5/5 single-run-must-pass までは詰まっていない
+
 ## Out of scope (次バージョン候補)
 
 - 長尺 retranscribe (`feat/long-form-retranscribe-2026-05-06` で別途 spec 済)
