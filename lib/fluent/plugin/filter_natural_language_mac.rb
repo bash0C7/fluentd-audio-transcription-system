@@ -11,8 +11,6 @@ module Fluent
 
       config_param :stopwords_path, :string
 
-      NOUN_TAGS = %w[Noun PersonalName PlaceName OrganizationName].freeze
-
       def configure(conf)
         super
         data = YAML.load_file(@stopwords_path) || {}
@@ -25,13 +23,16 @@ module Fluent
         text = record['text'].to_s
         return record if text.empty?
         lang = record['language'] || 'ja'
-        tagged = NaturalLanguageMac.tag(text)
-        words = []
-        tagged.each_line do |line|
-          token, kind = line.strip.split("\t", 2)
-          next unless kind && NOUN_TAGS.include?(kind)
+        # NLTagger(.lexicalClass / .nameType) returns Other for every
+        # Japanese token (verified empirically with xcrun swift), so we
+        # rely on NLTokenizer + stopwords + length>=2 to populate
+        # entities for both Japanese and English. See
+        # docs/superpowers/specs/2026-05-06-release-quality-graph-and-mic-quality.md.
+        words = NaturalLanguageMac.tokenize(text).each_line.filter_map do |line|
+          token = line.strip
+          next if token.length < 2
           next if @stopwords[lang]&.include?(token.downcase)
-          words << { 'text' => token, 'kind' => kind == 'Noun' ? 'term' : kind.downcase }
+          { 'text' => token, 'kind' => 'term' }
         end
         record.merge('entities' => words)
       end
