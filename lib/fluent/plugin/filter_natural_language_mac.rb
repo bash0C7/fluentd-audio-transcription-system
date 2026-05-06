@@ -15,12 +15,15 @@ module Fluent
         super
         # fluentd boots with `-Eascii-8bit:ascii-8bit`, which makes
         # YAML.load_file tag strings as ASCII-8BIT. Set membership is
-        # encoding-aware, so comparing against UTF-8 tokens from
-        # NaturalLanguageMac.tokenize would silently miss. Read the
-        # file explicitly as UTF-8 to keep stopword strings UTF-8.
-        data = YAML.safe_load(File.read(@stopwords_path, encoding: 'UTF-8')) || {}
+        # encoding-aware, so ASCII-8BIT 'けど' != UTF-8 'けど' and the
+        # NLTokenizer's UTF-8 tokens silently miss. Force-tag every
+        # stopword as UTF-8 so Set#include? matches regardless of host
+        # process default encoding.
+        data = YAML.load_file(@stopwords_path) || {}
         @stopwords = {}
-        data.each { |lang, words| @stopwords[lang.to_s] = (words || []).map { |w| w.to_s.downcase }.to_set }
+        data.each do |lang, words|
+          @stopwords[lang.to_s] = (words || []).map { |w| w.to_s.dup.force_encoding(Encoding::UTF_8).downcase }.to_set
+        end
       end
 
       def filter(_tag, _time, record)
@@ -28,6 +31,10 @@ module Fluent
         text = record['text'].to_s
         return record if text.empty?
         lang = (record['language'] || 'ja').to_s.split('-').first.downcase
+        # The token stream from NLTokenizer is always UTF-8, but record
+        # values arriving from fluentd's @type json may be ASCII-8BIT
+        # under -Eascii-8bit. Force lookup keys to UTF-8 too.
+        lang = lang.dup.force_encoding(Encoding::UTF_8)
         # NLTagger(.lexicalClass / .nameType) returns Other for every
         # Japanese token (verified empirically with xcrun swift), so we
         # rely on NLTokenizer + stopwords + length>=2 to populate
