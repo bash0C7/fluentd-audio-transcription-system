@@ -127,3 +127,74 @@ doc only。`grep -l '^# ' docs/superpowers/observations/` で漏れがないか
 3. A → 実装後 5 回 mini-E5 走らせる long-run
 
 各タスクで RED/GREEN/REFACTOR は分ける。3 タスク独立なので順序入れ替え可。
+
+---
+
+## D. SpeechAnalyzer 使い方の Apple sample 準拠化（A の root-cause fix）
+
+### 現象
+
+A の hardening (固定 sleep → condition wait + L2 whitelist + L3 mic
+delta soft化) を適用しても、5x mini-E5 long-run で
+`L3: no new mic transcripts (delta=0)` が 4/5 run で fail。緩和の
+判断は「30s window で SpeechAnalyzer の言語 confidence threshold は
+確率的」を仮定していたが、Apple 公式 SpeechAnalyzer サンプル
+(`/Users/bash/Downloads/BringingAdvancedSpeechToTextCapabilitiesToYourApp`)
+を読み合わせた結果、実は **AVAudioConverter callback の使い方が誤って
+いて mic 経路の出力 buffer が常に frameLength=0** という根本問題が
+判明。screen 経路は `CMSampleBuffer.toAVAudioPCMBuffer` 内で
+`pcm.frameLength = frames` を明示設定しているため通っていた。
+
+### 根本原因 2 つ
+
+**問題 1**: `CaptureCoordinator.startMic` の AVAudioConverter input
+block が永続的に `.haveData` を返し続け、終端 `.noDataNow` を出さない。
+
+```swift
+// 旧 (壊れている)
+converter?.convert(to: outBuffer, error: &error) { _, status in
+    status.pointee = .haveData
+    return buffer
+}
+```
+
+`.haveData` を返し続けると converter は「まだ input が来る」と認識
+して output frame を確定せず `outBuffer.frameLength = 0` のまま
+return される。SpeechAnalyzer に空 buffer が流れて transcript ゼロ。
+
+**問題 2**: 出力 buffer の frameCapacity を `buffer.frameCapacity` で
+計算している (実データ量 `frameLength` ではない)。サンプル
+`BufferConversion.swift` は `Double(buffer.frameLength) *
+sampleRateRatio` で計算している。capacity ベースだと resample 結果
+で余剰領域が出てフォーマット不整合のリスク。
+
+### 改善
+
+**`startMic` と `convertToAnalyzerFormat` の両方** をサンプル準拠に
+書き換える：
+
+- frameLength × (outSr / inSr) で出力 capacity を計算
+- 既存 `ConvertOnce` を使った 1 回フラグで、2 回目以降の input
+  callback で `.noDataNow` + nil を返す（Swift 6 strict concurrency
+  で `var bufferProcessed` が @Sendable closure に capture できない
+  ため、Sendable-safe な `ConvertOnce` で代替）
+- `converter.primeMethod = .none` (timestamp drift 回避、サンプル準拠)
+- convert status `.error` を呼び出し側で握って早期 return
+
+### 緩和 commit との関係
+
+A の commit `73e9879` (RED) / `ab07201` (GREEN) で入れた L2 whitelist
++ L3 mic-delta soft化 は **safety net として残す**。理由：
+
+- D の fix で mic transcript 頻度は大幅向上見込みだが、30s window で
+  poisson 的に 0 になる確率はゼロにならない（実会議 1 件/分 ペース
+  でも 30s で 0 件 = 約 60% だった、fix 後ペース上昇しても完全消滅
+  はしない）
+- L2 guardrailViolation whitelist は別観察（Apple Foundation Model
+  の挙動）で、D とは無関係
+
+### 検証
+
+`swift build` + `swift test` (既存 unit test スイート) → mini-E5 5x
+single-run-must-pass で実機 verify。緩和なしでも 5/5 PASS なら緩和
+revert を検討。緩和込みで 5/5 PASS が安定なら現状維持。
