@@ -38,4 +38,21 @@ class TestFilterNaturalLanguageMac < Test::Unit::TestCase
     refute_includes texts, 'the'
     refute_includes texts, 'a'
   end
+
+  def test_extracts_japanese_tokens_via_tokenizer
+    d = create_driver
+    d.run(default_tag: 'audio.final') do
+      d.feed(Fluent::EventTime.now, {
+        'kind' => 'final',
+        'text' => '会議の議事録です',
+        'language' => 'ja'
+      })
+    end
+    rec = d.filtered_records.first
+    assert_kind_of Array, rec['entities']
+    texts = rec['entities'].map { |e| e['text'] }
+    assert_includes texts, '会議'
+    assert_includes texts, '議事録'
+    refute_includes texts, 'の', 'single-char particle should be dropped by length>=2 filter'
+  end
 end
