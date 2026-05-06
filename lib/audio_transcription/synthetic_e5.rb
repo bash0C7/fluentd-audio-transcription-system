@@ -66,7 +66,8 @@ module AudioTranscription
       @baseline[:cafs] = Dir.glob(File.join(@spool_dir, '*.caf'))
       @baseline[:rotated_count] = count_rotated
       @baseline[:ack_count] = count_ack
-      @baseline[:transcripts_with_time] = count_transcripts_with_time
+      @baseline[:mic_transcripts]    = count_transcripts_with_time(channel: 'mic')
+      @baseline[:screen_transcripts] = count_transcripts_with_time(channel: 'screen')
     end
 
     def verify_layers
@@ -104,8 +105,16 @@ module AudioTranscription
 
     def verify_l3_sqlite
       with_db do |db|
-        t = db.get_first_value("SELECT COUNT(*) FROM transcripts WHERE ended_at > 0.0") - @baseline[:transcripts_with_time]
-        fail!(:L3, "no new transcripts with non-zero ended_at (delta=#{t})") if t <= 0
+        mic_delta = db.get_first_value(
+          "SELECT COUNT(*) FROM transcripts WHERE channel='mic' AND ended_at > 0.0"
+        ) - @baseline[:mic_transcripts]
+        fail!(:L3, "no new mic transcripts (delta=#{mic_delta})") if mic_delta <= 0
+
+        screen_delta = db.get_first_value(
+          "SELECT COUNT(*) FROM transcripts WHERE channel='screen' AND ended_at > 0.0"
+        ) - @baseline[:screen_transcripts]
+        fail!(:L3, "no new screen transcripts (delta=#{screen_delta})") if screen_delta <= 0
+
         s = db.get_first_value("SELECT COUNT(*) FROM audio_segments WHERE duration_sec > 0.0")
         fail!(:L3, "no audio_segments with non-zero duration_sec (count=#{s})") if s <= 0
       end
@@ -136,8 +145,13 @@ module AudioTranscription
       File.foreach(path).count
     end
 
-    def count_transcripts_with_time
-      with_db { |db| db.get_first_value('SELECT COUNT(*) FROM transcripts WHERE ended_at > 0.0') }
+    def count_transcripts_with_time(channel:)
+      with_db do |db|
+        db.get_first_value(
+          'SELECT COUNT(*) FROM transcripts WHERE channel=? AND ended_at > 0.0',
+          [channel]
+        )
+      end
     rescue SQLite3::SQLException
       0
     end

@@ -4,8 +4,30 @@
   <meta charset="utf-8">
   <title>Audio Transcription</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/3d-force-graph"></script>
+  <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+  <script>
+    // Bridge for PicoRuby:wasm: JS::Object#call(arg) maps to
+    // Function.prototype.call(arg) which binds arg as `this`, not as the
+    // first parameter. 3d-force-graph's factory API requires passing the
+    // container DOM element as a positional argument
+    // (`ForceGraph3D()(elem)`), so we wrap it in a regular JS function
+    // that PicoRuby can invoke via method-call dispatch.
+    // PicoRuby's JS bridge can't pass Ruby Floats as arguments
+    // (TypeError: "argument must be a String, Integer, or JS::Object"),
+    // so we configure the graph fully inside JS — including
+    // linkOpacity(0.4) — and return the ready-to-use instance.
+    window.createForceGraph = function (elem) {
+      return ForceGraph3D()(elem)
+        .nodeAutoColorBy('group')
+        .linkOpacity(0.4);
+    };
+    // Same float-bridge limitation: pass a serializable plain payload
+    // and let JS perform the graphData call with the JS Numbers.
+    window.updateGraphData = function (graph, payload) {
+      if (!graph) return;
+      graph.graphData(payload);
+    };
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/@picoruby/wasm-wasi@latest/dist/init.iife.js"></script>
 </head>
 <body>

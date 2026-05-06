@@ -7,18 +7,33 @@ require 'tmpdir'
 class TestRakeLifecycle < Test::Unit::TestCase
   REPO_ROOT = File.expand_path('..', __dir__)
 
+  TEST_PIDFILE_NAMES = %w[lifecycle-test stubborn].freeze
+
   def setup
     @rake = Rake::Application.new
     Rake.application = @rake
     Rake.load_rakefile(File.join(REPO_ROOT, 'Rakefile'))
     @run_dir = File.join(REPO_ROOT, 'tmp', 'run')
     FileUtils.mkdir_p(@run_dir)
+    # Clear any stale pidfiles from prior runs. Without this, the
+    # `20.times { break if File.exist?(pidfile); ... }` wait below trips on
+    # the leftover file before the freshly-spawned child has written its
+    # own pid, and stop_via_pidfile then reads a dead pid and short-circuits
+    # to the "stale pidfile" branch (no SystemExit).
+    TEST_PIDFILE_NAMES.each do |name|
+      path = File.join(@run_dir, "#{name}.pid")
+      File.delete(path) if File.exist?(path)
+    end
     @leftover_pids = []
   end
 
   def teardown
     @leftover_pids.each do |pid|
       Process.kill('KILL', pid) rescue nil
+    end
+    TEST_PIDFILE_NAMES.each do |name|
+      path = File.join(@run_dir, "#{name}.pid")
+      File.delete(path) if File.exist?(path)
     end
   end
 

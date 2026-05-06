@@ -1,12 +1,19 @@
 # web/assets/app.rb
 require 'js'
 
-# State maintained in Ruby; mirrored to 3d-force-graph via JS::Bridge.
+# Graph is built and configured inside JS (see window.createForceGraph in
+# index.erb). Two PicoRuby:wasm bridge limitations require this:
+# 1. JS::Object#call(arg) maps to Function.prototype.call(arg), binding
+#    arg as `this` instead of passing it positionally — so the factory
+#    pattern `ForceGraph3D()(elem)` can't be expressed in PicoRuby and
+#    must be invoked via a thin JS wrapper.
+# 2. Ruby Floats can't cross the JS bridge as arguments
+#    ("argument must be a String, Integer, or JS::Object") — so the
+#    configuration calls that need float values (e.g. linkOpacity(0.4))
+#    live inside the JS wrapper too.
 NODES = {}
 EDGES = {}
-GRAPH = JS.global[:ForceGraph3D].new.call(JS.document.getElementById('graph-canvas'))
-GRAPH.nodeAutoColorBy('group')
-GRAPH.linkOpacity(0.4)
+GRAPH = JS.global.createForceGraph(JS.document.getElementById('graph-canvas'))
 
 QUICK_DIV   = JS.document.getElementById('quick-stream')
 PERFECT_DIV = JS.document.getElementById('perfect-stream')
@@ -44,6 +51,7 @@ end
 TAU = 1800.0
 
 def redraw_graph
+  return if GRAPH.nil?
   now = Time.now.to_f
   edges_for_js = []
   EDGES.each_pair do |_, e|
@@ -56,22 +64,33 @@ def redraw_graph
 end
 
 ws = JS.global[:WebSocket].new("ws://#{JS.global[:location][:host]}/stream")
+ws.addEventListener('open') do |_event|
+  JS.global[:console].log('[app.rb] WS open, readyState=', ws[:readyState])
+end
+ws.addEventListener('close') do |event|
+  JS.global[:console].log('[app.rb] WS close, code=', event[:code])
+end
+# PicoRuby's JS bridge: prefer direct property access (parsed[:key]) over
+# `.to_a + find { }` — the array-of-pairs form yields wrapped JS strings
+# that don't compare equal to Ruby string literals.
 ws.addEventListener('message') do |event|
-  msg = JS.global[:JSON].parse(event[:data]).to_a
-  type = msg.find { |kv| kv[0].to_s == 'type' }
-  next unless type
-  data = msg.find { |kv| kv[0].to_s == 'data' }
-  next unless data
-  payload = data[1]
-  case type[1].to_s
+  parsed = JS.global[:JSON].parse(event[:data])
+  type_value = parsed[:type].to_s
+  payload = parsed[:data]
+  next if type_value.empty? || payload.nil?
+  case type_value
   when 'quick'
     push_quick(payload[:text].to_s)
   when 'final'
     push_perfect(payload[:ch].to_s, payload[:text].to_s, '')
-    (payload[:entities].to_a || []).each do |left|
-      (payload[:entities].to_a || []).each do |right|
-        next if left == right
-        upsert_edge(left[:text].to_s, right[:text].to_s, 1.0)
+    entities = payload[:entities]
+    if entities && !entities.nil?
+      entities_arr = entities.to_a
+      entities_arr.each do |left|
+        entities_arr.each do |right|
+          next if left == right
+          upsert_edge(left[:text].to_s, right[:text].to_s, 1.0)
+        end
       end
     end
   when 'polished'
@@ -82,8 +101,11 @@ ws.addEventListener('message') do |event|
   end
 end
 
-# Initial bootstrap from /api/recent
-JS.global.fetch('/api/recent?since=0').then do |resp|
+# Initial bootstrap from /api/recent.
+# PicoRuby's JS::Object#fetch shim requires the block form (not Promise#then),
+# but Response#json() is not shimmed and still returns a Promise — hence the
+# inner .then.
+JS.global.fetch('/api/recent?since=0') do |resp|
   resp.json.then do |data|
     transcripts = data[:transcripts].to_a
     transcripts.reverse_each do |t|
