@@ -30,10 +30,10 @@ final class RotatingRecorder: @unchecked Sendable {
             currentURL = url
             let writer = try AVAssetWriter(outputURL: url, fileType: .caf)
             let outputSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVFormatIDKey: kAudioFormatMPEG4AAC_HE,
                 AVNumberOfChannelsKey: 1,
                 AVSampleRateKey: 16000,
-                AVEncoderBitRateKey: 64000
+                AVEncoderBitRateKey: 32000
             ]
             let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings)
             writerInput.expectsMediaDataInRealTime = true
