@@ -13,7 +13,12 @@ module Fluent
 
       def configure(conf)
         super
-        data = YAML.load_file(@stopwords_path) || {}
+        # fluentd boots with `-Eascii-8bit:ascii-8bit`, which makes
+        # YAML.load_file tag strings as ASCII-8BIT. Set membership is
+        # encoding-aware, so comparing against UTF-8 tokens from
+        # NaturalLanguageMac.tokenize would silently miss. Read the
+        # file explicitly as UTF-8 to keep stopword strings UTF-8.
+        data = YAML.safe_load(File.read(@stopwords_path, encoding: 'UTF-8')) || {}
         @stopwords = {}
         data.each { |lang, words| @stopwords[lang.to_s] = (words || []).map { |w| w.to_s.downcase }.to_set }
       end

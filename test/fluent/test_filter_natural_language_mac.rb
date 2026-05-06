@@ -97,4 +97,5 @@ class TestFilterNaturalLanguageMac < Test::Unit::TestCase
     end
     assert_includes texts, 'ありがとう'
   end
+
 end
