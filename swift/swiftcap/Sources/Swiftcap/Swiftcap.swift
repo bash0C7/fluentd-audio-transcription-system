@@ -9,6 +9,7 @@ struct Swiftcap {
             ?? NSString(string: "~/Library/Application Support/audio-transcription/spool").expandingTildeInPath)
         let locale = Locale(identifier: ProcessInfo.processInfo.environment["SWIFTCAP_LOCALE"] ?? "ja-JP")
 
+        FileHandle.standardError.write("swiftcap starting spool=\(spoolDir.path) locale=\(locale.identifier)\n".data(using: .utf8)!)
         let coordinator = CaptureCoordinator(spoolDir: spoolDir)
         do {
             try await coordinator.start(locale: locale)
@@ -16,6 +17,7 @@ struct Swiftcap {
             FileHandle.standardError.write("startup failed: \(error)\n".data(using: .utf8)!)
             exit(1)
         }
+        FileHandle.standardError.write("swiftcap ready\n".data(using: .utf8)!)
 
         let hupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .global())
         hupSource.setEventHandler { Task { await coordinator.rotateAll(reason: "hup") } }

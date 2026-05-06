@@ -1,5 +1,5 @@
 // swift/swiftcap/Sources/Swiftcap/TranscriberWrapper.swift
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import Speech
 
@@ -11,6 +11,11 @@ final class TranscriberWrapper: @unchecked Sendable {
     private let analyzer: SpeechAnalyzer
     private let transcriber: SpeechTranscriber
     private let inputBuilder: AnalyzerInputSequence
+    // SpeechAnalyzer's required input format is queried at init time via
+    // bestAvailableAudioFormat. macOS 26 traps with "Audio sample data must be
+    // 16-bit signed integers" when the buffer format does not match.
+    private let analyzerFormat: AVAudioFormat
+    private var converter: AVAudioConverter?
 
     init(channel: String, locale: Locale, quickWriter: SpoolWriter, finalWriter: SpoolWriter) async throws {
         self.channel = channel
@@ -24,7 +29,13 @@ final class TranscriberWrapper: @unchecked Sendable {
         )
         self.analyzer = SpeechAnalyzer(modules: [transcriber])
         self.inputBuilder = AnalyzerInputSequence()
-        try await ensureModelInstalled(locale: locale)
+        try await Self.ensureModelInstalled(transcriber: transcriber, locale: locale)
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            throw NSError(domain: "swiftcap.transcriber", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "no compatible audio format for SpeechTranscriber on locale \(locale.identifier)"])
+        }
+        self.analyzerFormat = format
+        FileHandle.standardError.write("transcriber[\(channel)] analyzerFormat=\(format)\n".data(using: .utf8)!)
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -56,14 +67,40 @@ final class TranscriberWrapper: @unchecked Sendable {
     }
 
     func append(_ buffer: AVAudioPCMBuffer) async throws {
-        _ = try await analyzer.analyzeSequence(inputBuilder.append(buffer))
+        guard let target = convertToAnalyzerFormat(buffer) else { return }
+        _ = try await analyzer.analyzeSequence(inputBuilder.append(target))
+    }
+
+    private func convertToAnalyzerFormat(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        if buffer.format.isEqual(analyzerFormat) { return buffer }
+        if converter == nil {
+            converter = AVAudioConverter(from: buffer.format, to: analyzerFormat)
+        }
+        guard let converter else { return nil }
+        let inSr = buffer.format.sampleRate
+        let outSr = analyzerFormat.sampleRate
+        let outCapacity = AVAudioFrameCount(Double(buffer.frameCapacity) * outSr / inSr)
+        guard outCapacity > 0,
+              let out = AVAudioPCMBuffer(pcmFormat: analyzerFormat, frameCapacity: outCapacity)
+        else { return nil }
+        var err: NSError?
+        let consumed = ConvertOnce()
+        converter.convert(to: out, error: &err) { _, status in
+            if consumed.fire() {
+                status.pointee = .haveData
+                return buffer
+            }
+            status.pointee = .endOfStream
+            return nil
+        }
+        return err == nil ? out : nil
     }
 
     func finalize() async throws {
         try await analyzer.finalizeAndFinishThroughEndOfInput()
     }
 
-    private func ensureModelInstalled(locale: Locale) async throws {
+    private static func ensureModelInstalled(transcriber: SpeechTranscriber, locale: Locale) async throws {
         let supported = await SpeechTranscriber.supportedLocales
         guard supported.map({ $0.identifier(.bcp47) }).contains(locale.identifier(.bcp47)) else {
             throw NSError(domain: "swiftcap", code: 1, userInfo: [NSLocalizedDescriptionKey: "locale not supported"])
@@ -86,5 +123,18 @@ final class AnalyzerInputSequence {
             continuation.yield(AnalyzerInput(buffer: buffer))
             continuation.finish()
         }
+    }
+}
+
+// One-shot latch used to gate AVAudioConverter's input callback to a single yield.
+final class ConvertOnce: @unchecked Sendable {
+    private var fired = false
+    private let lock = NSLock()
+    func fire() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if fired { return false }
+        fired = true
+        return true
     }
 }
