@@ -24,23 +24,22 @@ struct Swiftcap {
         signal(SIGHUP, SIG_IGN)
         hupSource.resume()
 
-        let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
-        termSource.setEventHandler {
+        let shutdown: @Sendable () -> Void = {
             Task {
-                await coordinator.rotateAll(reason: "shutdown")
+                FileHandle.standardError.write("shutdown: stopping engines + rotating\n".data(using: .utf8)!)
+                await coordinator.shutdownRotate(reason: "shutdown")
+                FileHandle.standardError.write("shutdown: done, exiting\n".data(using: .utf8)!)
                 exit(0)
             }
         }
+
+        let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+        termSource.setEventHandler(handler: shutdown)
         signal(SIGTERM, SIG_IGN)
         termSource.resume()
 
         let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
-        intSource.setEventHandler {
-            Task {
-                await coordinator.rotateAll(reason: "shutdown")
-                exit(0)
-            }
-        }
+        intSource.setEventHandler(handler: shutdown)
         signal(SIGINT, SIG_IGN)
         intSource.resume()
 

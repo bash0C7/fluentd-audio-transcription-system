@@ -10,12 +10,16 @@ final class TranscriberWrapper: @unchecked Sendable {
     private let finalWriter: SpoolWriter
     private let analyzer: SpeechAnalyzer
     private let transcriber: SpeechTranscriber
-    private let inputBuilder: AnalyzerInputSequence
     // SpeechAnalyzer's required input format is queried at init time via
     // bestAvailableAudioFormat. macOS 26 traps with "Audio sample data must be
     // 16-bit signed integers" when the buffer format does not match.
     private let analyzerFormat: AVAudioFormat
     private var converter: AVAudioConverter?
+    // Single long-lived input sequence — SpeechAnalyzer rejects re-entrant
+    // analyzeSequence with `Cannot simultaneously analyze multiple input
+    // sequences`. We yield each buffer to one continuation and call start()
+    // on it exactly once.
+    private let continuation: AsyncStream<AnalyzerInput>.Continuation
 
     init(channel: String, locale: Locale, quickWriter: SpoolWriter, finalWriter: SpoolWriter) async throws {
         self.channel = channel
@@ -28,7 +32,8 @@ final class TranscriberWrapper: @unchecked Sendable {
             attributeOptions: [.audioTimeRange]
         )
         self.analyzer = SpeechAnalyzer(modules: [transcriber])
-        self.inputBuilder = AnalyzerInputSequence()
+        let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+        self.continuation = continuation
         try await Self.ensureModelInstalled(transcriber: transcriber, locale: locale)
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw NSError(domain: "swiftcap.transcriber", code: 2,
@@ -36,6 +41,16 @@ final class TranscriberWrapper: @unchecked Sendable {
         }
         self.analyzerFormat = format
         FileHandle.standardError.write("transcriber[\(channel)] analyzerFormat=\(format)\n".data(using: .utf8)!)
+
+        let analyzerRef = analyzer
+        Task {
+            do {
+                try await analyzerRef.start(inputSequence: stream)
+            } catch {
+                FileHandle.standardError.write("analyzer.start[\(channel)] error: \(error)\n".data(using: .utf8)!)
+            }
+        }
+
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -61,14 +76,14 @@ final class TranscriberWrapper: @unchecked Sendable {
                     }
                 }
             } catch {
-                FileHandle.standardError.write("transcriber error: \(error)\n".data(using: .utf8)!)
+                FileHandle.standardError.write("transcriber[\(self.channel)] results error: \(error)\n".data(using: .utf8)!)
             }
         }
     }
 
-    func append(_ buffer: AVAudioPCMBuffer) async throws {
+    func append(_ buffer: AVAudioPCMBuffer) {
         guard let target = convertToAnalyzerFormat(buffer) else { return }
-        _ = try await analyzer.analyzeSequence(inputBuilder.append(target))
+        continuation.yield(AnalyzerInput(buffer: target))
     }
 
     private func convertToAnalyzerFormat(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
@@ -97,6 +112,7 @@ final class TranscriberWrapper: @unchecked Sendable {
     }
 
     func finalize() async throws {
+        continuation.finish()
         try await analyzer.finalizeAndFinishThroughEndOfInput()
     }
 
@@ -109,19 +125,6 @@ final class TranscriberWrapper: @unchecked Sendable {
         guard !installed.map({ $0.identifier(.bcp47) }).contains(locale.identifier(.bcp47)) else { return }
         if let downloader = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             try await downloader.downloadAndInstall()
-        }
-    }
-}
-
-// AnalyzerInputSequence wraps each AVAudioPCMBuffer as a SpeechAnalyzer-compatible
-// AnalyzerInput sequence. SpeechAnalyzer.analyzeSequence requires an AsyncSequence
-// whose element type is AnalyzerInput.
-@available(macOS 26.0, *)
-final class AnalyzerInputSequence {
-    func append(_ buffer: AVAudioPCMBuffer) -> AsyncStream<AnalyzerInput> {
-        AsyncStream { continuation in
-            continuation.yield(AnalyzerInput(buffer: buffer))
-            continuation.finish()
         }
     }
 }

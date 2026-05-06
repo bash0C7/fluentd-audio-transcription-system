@@ -16,6 +16,12 @@ actor CaptureCoordinator {
     private var rotateTask: Task<Void, Never>?
     private let micEngine = AVAudioEngine()
     private var screenStream: SCStream?
+    private var screenDelegate: ScreenStreamDelegate?
+    // SCStream.addStreamOutput retains the output only weakly; without a
+    // strong property here the inline-created ScreenAudioOutput would be
+    // ARC-released as soon as addStreamOutput returns, and ScreenCaptureKit
+    // would log "streamOutput NOT found. Dropping frame" for every buffer.
+    private var screenAudioOutput: ScreenAudioOutput?
     private static let targetFormat: AVAudioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
 
     init(spoolDir: URL) {
@@ -55,6 +61,25 @@ actor CaptureCoordinator {
         }
     }
 
+    /// Stops mic capture and the screen audio stream so no more buffers are
+    /// in flight, then runs the same rotateAll path. Used at shutdown — without
+    /// stopping the engines first, late buffers arrive between markAsFinished
+    /// and finishWriting completion, leaving the CAF without a packet table
+    /// (afinfo: "audio packets: 0", AVAudioFile fails to open).
+    func shutdownRotate(reason: String) async {
+        micEngine.stop()
+        if let stream = screenStream {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                stream.stopCapture { _ in cont.resume() }
+            }
+        }
+        screenStream = nil
+        for (ch, recorder) in recorders {
+            await rotate(channel: ch, recorder: recorder, reason: reason)
+        }
+        recorders.removeAll()
+    }
+
     func acknowledgeAndDelete(paths: [String]) {
         for p in paths {
             let url = URL(fileURLWithPath: p)
@@ -68,6 +93,7 @@ actor CaptureCoordinator {
     }
 
     private func rotate(channel: String, recorder: RotatingRecorder, reason: String) async {
+        FileHandle.standardError.write("rotate[\(channel)]: finalize begin\n".data(using: .utf8)!)
         let finalized: (path: String, bytes: Int) = await withCheckedContinuation { (cont: CheckedContinuation<(String, Int), Never>) in
             recorder.finalize { url in
                 let attrs = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
@@ -75,6 +101,7 @@ actor CaptureCoordinator {
                 cont.resume(returning: (url.path, bytes))
             }
         }
+        FileHandle.standardError.write("rotate[\(channel)]: finalize done bytes=\(finalized.bytes)\n".data(using: .utf8)!)
         try? stateWriter.append([
             "ts": Date().timeIntervalSince1970,
             "kind": "rotated",
@@ -114,22 +141,30 @@ actor CaptureCoordinator {
 
     private func feed(channel: String, buffer: AVAudioPCMBuffer, time: AVAudioTime) async {
         try? recorders[channel]?.append(buffer)
-        try? await transcribers[channel]?.append(buffer)
+        transcribers[channel]?.append(buffer)
         sounds[channel]?.append(buffer, at: time)
     }
 
     private func startScreen() async throws {
         let content = try await SCShareableContent.current
-        guard let display = content.displays.first else { return }
+        guard let display = content.displays.first else {
+            FileHandle.standardError.write("startScreen: no display available\n".data(using: .utf8)!)
+            return
+        }
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.sampleRate = 16000
         config.channelCount = 1
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-        try stream.addStreamOutput(ScreenAudioOutput(coordinator: self), type: .audio, sampleHandlerQueue: .global(qos: .userInitiated))
+        let delegate = ScreenStreamDelegate()
+        screenDelegate = delegate
+        let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
+        let audioOutput = ScreenAudioOutput(coordinator: self)
+        screenAudioOutput = audioOutput
+        try stream.addStreamOutput(audioOutput, type: .audio, sampleHandlerQueue: .global(qos: .userInitiated))
         try await stream.startCapture()
         screenStream = stream
+        FileHandle.standardError.write("startScreen: capturing display=\(display.displayID) requested 16kHz mono\n".data(using: .utf8)!)
     }
 
     fileprivate func feedScreen(buffer: AVAudioPCMBuffer, time: AVAudioTime) async {
@@ -140,16 +175,35 @@ actor CaptureCoordinator {
 @available(macOS 26.0, *)
 final class ScreenAudioOutput: NSObject, SCStreamOutput {
     private weak var coordinator: CaptureCoordinator?
+    private var bufferCount = 0
+    private var conversionFailureCount = 0
     init(coordinator: CaptureCoordinator) { self.coordinator = coordinator }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio,
-              let pcm = sb.toAVAudioPCMBuffer() else { return }
+        guard type == .audio else { return }
+        bufferCount += 1
+        if bufferCount == 1 {
+            FileHandle.standardError.write("ScreenAudioOutput: first buffer received format=\(String(describing: sb.formatDescription))\n".data(using: .utf8)!)
+        }
+        guard let pcm = sb.toAVAudioPCMBuffer() else {
+            conversionFailureCount += 1
+            if conversionFailureCount == 1 || conversionFailureCount % 200 == 0 {
+                FileHandle.standardError.write("ScreenAudioOutput: toAVAudioPCMBuffer returned nil (count=\(conversionFailureCount))\n".data(using: .utf8)!)
+            }
+            return
+        }
         let time = AVAudioTime(sampleTime: sb.presentationTimeStamp.value, atRate: pcm.format.sampleRate)
         let coord = coordinator
         Task { [pcm, time] in
             await coord?.feedScreen(buffer: pcm, time: time)
         }
+    }
+}
+
+@available(macOS 26.0, *)
+final class ScreenStreamDelegate: NSObject, SCStreamDelegate {
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        FileHandle.standardError.write("SCStream stopped with error: \(error)\n".data(using: .utf8)!)
     }
 }
 

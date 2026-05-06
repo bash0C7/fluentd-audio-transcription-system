@@ -1,5 +1,5 @@
 // swift/swiftcap/Sources/Swiftcap/RotatingRecorder.swift
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 final class RotatingRecorder: @unchecked Sendable {
@@ -45,11 +45,17 @@ final class RotatingRecorder: @unchecked Sendable {
         }
     }
 
-    func append(_ buffer: AVAudioPCMBuffer) throws {
-        try queue.sync {
-            guard let input = self.input,
+    func append(_ buffer: AVAudioPCMBuffer) {
+        // Drop buffers under backpressure — never block the queue. Earlier
+        // versions spun on `isReadyForMoreMediaData`, which deadlocked finalize
+        // because the HE-AAC encoder leaves the input not-ready while it
+        // flushes, and the spinning append then blocked the serial queue
+        // forever, preventing finalize's queue.async block from ever starting.
+        queue.async { [weak self] in
+            guard let self,
+                  let input = self.input,
+                  input.isReadyForMoreMediaData,
                   let sampleBuffer = buffer.toCMSampleBuffer() else { return }
-            while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.01) }
             input.append(sampleBuffer)
         }
     }
