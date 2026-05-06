@@ -9,6 +9,7 @@ final class RotatingRecorder: @unchecked Sendable {
     private var assetWriter: AVAssetWriter?
     private var input: AVAssetWriterInput?
     private let queue = DispatchQueue(label: "swiftcap.recorder")
+    private var startedAt: TimeInterval = 0
 
     private static let formatter: DateFormatter = {
         let f = DateFormatter()
@@ -28,6 +29,7 @@ final class RotatingRecorder: @unchecked Sendable {
             let stamp = Self.formatter.string(from: date)
             let url = spoolDir.appendingPathComponent("\(channel)-\(stamp).caf")
             currentURL = url
+            startedAt = date.timeIntervalSince1970
             let writer = try AVAssetWriter(outputURL: url, fileType: .caf)
             let outputSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC_HE,
@@ -60,18 +62,20 @@ final class RotatingRecorder: @unchecked Sendable {
         }
     }
 
-    func finalize(_ completion: @escaping @Sendable (URL) -> Void) {
+    func finalize(_ completion: @escaping @Sendable (URL, TimeInterval, TimeInterval) -> Void) {
         queue.async { [weak self] in
             guard let self,
                   let writer = self.assetWriter,
                   let input = self.input,
                   let url = self.currentURL else { return }
+            let startedAt = self.startedAt
             input.markAsFinished()
             writer.finishWriting {
+                let endedAt = Date().timeIntervalSince1970
                 self.assetWriter = nil
                 self.input = nil
                 self.currentURL = nil
-                completion(url)
+                completion(url, startedAt, endedAt)
             }
         }
     }

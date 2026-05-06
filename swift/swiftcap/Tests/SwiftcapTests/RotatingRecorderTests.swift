@@ -17,12 +17,37 @@ struct RotatingRecorderTests {
         let buffer = try makeSilentBuffer(seconds: 1)
         try recorder.append(buffer)
 
-        let url = await withCheckedContinuation { (cont: CheckedContinuation<URL, Never>) in
-            recorder.finalize { url in cont.resume(returning: url) }
+        let result: (url: URL, startedAt: TimeInterval, endedAt: TimeInterval) =
+            await withCheckedContinuation { (cont: CheckedContinuation<(URL, TimeInterval, TimeInterval), Never>) in
+                recorder.finalize { url, startedAt, endedAt in
+                    cont.resume(returning: (url, startedAt, endedAt))
+                }
+            }
+        #expect(result.url.lastPathComponent.hasPrefix("mic-"))
+        #expect(result.url.lastPathComponent.hasSuffix(".caf"))
+        #expect(FileManager.default.fileExists(atPath: result.url.path))
+    }
+
+    @Test
+    func finalizeCallbackCarriesStartedAndEndedAt() async throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let startDate = Date(timeIntervalSince1970: 1735689600)
+        let recorder = RotatingRecorder(channel: "mic", spoolDir: tmp)
+        try recorder.start(at: startDate)
+        try recorder.append(try makeSilentBuffer(seconds: 1))
+
+        let beforeFinalize = Date().timeIntervalSince1970
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<(URL, TimeInterval, TimeInterval), Never>) in
+            recorder.finalize { url, startedAt, endedAt in
+                cont.resume(returning: (url, startedAt, endedAt))
+            }
         }
-        #expect(url.lastPathComponent.hasPrefix("mic-"))
-        #expect(url.lastPathComponent.hasSuffix(".caf"))
-        #expect(FileManager.default.fileExists(atPath: url.path))
+
+        #expect(result.1 == startDate.timeIntervalSince1970, "startedAt must equal start(at:) date")
+        #expect(result.2 >= beforeFinalize, "endedAt must be >= time finalize was called")
     }
 
     @Test
@@ -35,16 +60,16 @@ struct RotatingRecorderTests {
         try recorder.start(at: Date(timeIntervalSince1970: 1735689600))
         try recorder.append(try makeSilentBuffer(seconds: 1))
 
-        let url = await withCheckedContinuation { (cont: CheckedContinuation<URL, Never>) in
-            recorder.finalize { url in cont.resume(returning: url) }
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<(URL, TimeInterval, TimeInterval), Never>) in
+            recorder.finalize { url, startedAt, endedAt in
+                cont.resume(returning: (url, startedAt, endedAt))
+            }
         }
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let attrs = try FileManager.default.attributesOfItem(atPath: result.0.path)
         let bytes = (attrs[.size] as? NSNumber)?.intValue ?? 0
-        // 1 second of any reasonable PCM/AAC config produces well over 1 KB.
-        // Empty-encoder failure on macOS 26 leaves the file at 0 bytes.
         #expect(bytes > 1024, "expected encoded CAF to be > 1KB, got \(bytes) bytes")
 
-        let opened = try AVAudioFile(forReading: url)
+        let opened = try AVAudioFile(forReading: result.0)
         #expect(opened.length > 0, "AVAudioFile reports zero frames")
     }
 

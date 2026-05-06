@@ -94,13 +94,14 @@ actor CaptureCoordinator {
 
     private func rotate(channel: String, recorder: RotatingRecorder, reason: String) async {
         FileHandle.standardError.write("rotate[\(channel)]: finalize begin\n".data(using: .utf8)!)
-        let finalized: (path: String, bytes: Int) = await withCheckedContinuation { (cont: CheckedContinuation<(String, Int), Never>) in
-            recorder.finalize { url in
-                let attrs = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
-                let bytes = (attrs[.size] as? NSNumber)?.intValue ?? 0
-                cont.resume(returning: (url.path, bytes))
+        let finalized: (path: String, bytes: Int, startedAt: TimeInterval, endedAt: TimeInterval) =
+            await withCheckedContinuation { (cont: CheckedContinuation<(String, Int, TimeInterval, TimeInterval), Never>) in
+                recorder.finalize { url, startedAt, endedAt in
+                    let attrs = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
+                    let bytes = (attrs[.size] as? NSNumber)?.intValue ?? 0
+                    cont.resume(returning: (url.path, bytes, startedAt, endedAt))
+                }
             }
-        }
         FileHandle.standardError.write("rotate[\(channel)]: finalize done bytes=\(finalized.bytes)\n".data(using: .utf8)!)
         try? stateWriter.append([
             "ts": Date().timeIntervalSince1970,
@@ -108,6 +109,8 @@ actor CaptureCoordinator {
             "channel": channel,
             "path": finalized.path,
             "bytes": finalized.bytes,
+            "started_at": finalized.startedAt,
+            "ended_at": finalized.endedAt,
             "reason": reason
         ])
     }
