@@ -41,13 +41,21 @@ README が定義する release 品質水準は明確で 1 行しかない:
 
 最浅で release 品質強化方向は **A1**。 採用は個別 spec で。
 
-### B. mini-E5 single-run-must-pass まで詰める
+### B. mini-E5 single-run-must-pass まで詰める ✅ verified 5/5 (2026-05-07)
 
-現状 mini-E5 5 連続実行で run 1 のみ稀に L4 ack-count timing flake (fluentd readiness の初期化遅延)。 release 品質ライン (3 ペイン動作) 自体は脅かしていないが、 必達条件チェック (5 連続最低 4/5 PASS) のマージンを削ぐ。
+> **Status: 既達成**。 P2 として個別 spec 切り出し前の baseline 計測で **5 連続 PASS** を確認、 候補 B1/B2/B3 いずれも実装不要。
 
-- B1: fluentd ready 検知を ack.jsonl の最初の出現で代替
-- B2: startup 順序を fluentd → swiftcap (現状逆順) に入れ替える
-- B3: mini-E5 の `start_at` baseline を「fluentd worker is now running」 ログ出現後に固定
+直近の release-quality completion 系 commit (R3 mic 二段 convert 廃止 + scope cleanup) を merge した後の baseline 計測 (`tmp/longrun/mini-e5-p2-baseline.log`):
+
+```
+run 1 mini-E5 PASS — all 5 layers verified
+run 2 mini-E5 PASS — all 5 layers verified
+run 3 mini-E5 PASS — all 5 layers verified
+run 4 mini-E5 PASS — all 5 layers verified
+run 5 mini-E5 PASS — all 5 layers verified
+```
+
+旧来 r3c run で観測した L4 `ack count 61 != rotated count 2` flake は再現せず。 pos 整備状態 + R3 後の swiftcap 起動安定性の組み合わせで自然解消したと判断。 候補 B1-B3 は 「実装したらより堅牢」 ではあるが現状で release 品質ラインの margin (5/5) を超えており、 投資効果薄。 **再 flake 観測されたら個別 spec で着手** という deferred policy。
 
 ### C. mic 品質さらなる改善
 
