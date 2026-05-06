@@ -22,6 +22,19 @@ actor CaptureCoordinator {
     // ARC-released as soon as addStreamOutput returns, and ScreenCaptureKit
     // would log "streamOutput NOT found. Dropping frame" for every buffer.
     private var screenAudioOutput: ScreenAudioOutput?
+
+    // Tracks whether the screen channel is currently capturing. Set true after
+    // startScreen succeeds, cleared by handleScreenStreamStopped or shutdownRotate.
+    // Internal (not private) so tests can drive the active-state path without
+    // needing a real SCStream.
+    internal var screenChannelActive: Bool = false
+
+    #if DEBUG
+    internal func markScreenActiveForTesting() {
+        screenChannelActive = true
+    }
+    #endif
+
     private static let targetFormat: AVAudioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
 
     init(spoolDir: URL) {
@@ -74,6 +87,9 @@ actor CaptureCoordinator {
             }
         }
         screenStream = nil
+        screenAudioOutput = nil
+        screenDelegate = nil
+        screenChannelActive = false
         for (ch, recorder) in recorders {
             await rotate(channel: ch, recorder: recorder, reason: reason)
         }
@@ -180,6 +196,7 @@ actor CaptureCoordinator {
         config.sampleRate = 16000
         config.channelCount = 1
         let delegate = ScreenStreamDelegate()
+        delegate.coordinator = self
         screenDelegate = delegate
         let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
         let audioOutput = ScreenAudioOutput(coordinator: self)
@@ -187,11 +204,45 @@ actor CaptureCoordinator {
         try stream.addStreamOutput(audioOutput, type: .audio, sampleHandlerQueue: .global(qos: .userInitiated))
         try await stream.startCapture()
         screenStream = stream
+        screenChannelActive = true
         FileHandle.standardError.write("startScreen: capturing display=\(display.displayID) requested 16kHz mono\n".data(using: .utf8)!)
     }
 
     fileprivate func feedScreen(buffer: AVAudioPCMBuffer, time: AVAudioTime) async {
         await feed(channel: "screen", buffer: buffer, time: time)
+    }
+
+    /// Called when SCStream emits didStopWithError. Marks the screen channel as
+    /// dead, emits a loud channel_failed event, finalizes any in-flight screen
+    /// recorder one last time, and drops screen-side state. Mic continues.
+    /// Idempotent: the screenChannelActive guard ensures repeated calls no-op.
+    func handleScreenStreamStopped(error: Error) async {
+        guard screenChannelActive else { return }
+        screenChannelActive = false
+
+        FileHandle.standardError.write(
+            "handleScreenStreamStopped: marking screen channel as dead, mic continues. error=\(error)\n"
+                .data(using: .utf8)!
+        )
+
+        try? stateWriter.append([
+            "ts": Date().timeIntervalSince1970,
+            "kind": "channel_failed",
+            "channel": "screen",
+            "reason": "scstream_error",
+            "error": "\(error)"
+        ])
+
+        screenStream = nil
+        screenAudioOutput = nil
+        screenDelegate = nil
+
+        if let r = recorders["screen"] {
+            await rotate(channel: "screen", recorder: r, reason: "channel_failed")
+            recorders["screen"] = nil
+        }
+        transcribers["screen"] = nil
+        sounds["screen"] = nil
     }
 }
 
@@ -225,8 +276,13 @@ final class ScreenAudioOutput: NSObject, SCStreamOutput {
 
 @available(macOS 26.0, *)
 final class ScreenStreamDelegate: NSObject, SCStreamDelegate {
+    weak var coordinator: CaptureCoordinator?
+
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         FileHandle.standardError.write("SCStream stopped with error: \(error)\n".data(using: .utf8)!)
+        if let coord = coordinator {
+            Task { await coord.handleScreenStreamStopped(error: error) }
+        }
     }
 }
 
