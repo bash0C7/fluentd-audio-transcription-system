@@ -126,8 +126,14 @@ actor CaptureCoordinator {
         let input = micEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: inputFormat, to: format)
+        let firstBufferLogged = ConvertOnce()
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
             guard let self else { return }
+            if firstBufferLogged.fire() {
+                FileHandle.standardError.write(
+                    "MicAudioOutput: first buffer received format=\(buffer.format)\n".data(using: .utf8)!
+                )
+            }
             let outBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameCapacity)!
             var error: NSError?
             converter?.convert(to: outBuffer, error: &error) { _, status in
@@ -137,6 +143,20 @@ actor CaptureCoordinator {
             Task { await self.feed(channel: "mic", buffer: outBuffer, time: time) }
         }
         try micEngine.start()
+        FileHandle.standardError.write(
+            "startMic: input running format=\(inputFormat) → \(format)\n".data(using: .utf8)!
+        )
+
+        // Loud failure if no buffer arrives within 5s — prevents silent silence
+        // (the bug observed in 2026-05-06 E5 where mic captured nothing for 22 minutes).
+        try await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+        if !firstBufferLogged.isFired {
+            throw NSError(
+                domain: "swiftcap.mic",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "no mic buffer in 5s — check Microphone permission and System Settings → Privacy & Security → Microphone"]
+            )
+        }
     }
 
     private func feed(channel: String, buffer: AVAudioPCMBuffer, time: AVAudioTime) async {

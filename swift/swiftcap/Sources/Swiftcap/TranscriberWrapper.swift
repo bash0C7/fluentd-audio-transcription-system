@@ -140,4 +140,9 @@ final class ConvertOnce: @unchecked Sendable {
         fired = true
         return true
     }
+    /// Read-only check whether fire() has been called.
+    var isFired: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return fired
+    }
 }
