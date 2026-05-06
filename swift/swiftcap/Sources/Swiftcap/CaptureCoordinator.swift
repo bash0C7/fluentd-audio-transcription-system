@@ -53,19 +53,17 @@ actor CaptureCoordinator {
             try recorders[ch]?.start()
         }
 
-        // Per-channel SoundAnalyzerWrapper format: the mic side uses the
-        // AVAudioEngine input node's native format so the capture path can
-        // pass-through buffers without resampling (matches Apple's
-        // BringingAdvancedSpeechToTextCapabilitiesToYourApp sample, which
-        // feeds the transcriber's input format directly). The screen side
-        // stays at 16kHz mono Float32 because SCStreamConfiguration already
-        // requests that format from ScreenCaptureKit.
-        let micFormat = micEngine.inputNode.outputFormat(forBus: 0)
+        // Screen SoundAnalyzerWrapper has a fixed format (matches
+        // SCStreamConfiguration). The mic SoundAnalyzerWrapper is created
+        // inside startMic() once micEngine.inputNode's format is queried —
+        // touching micEngine.inputNode here, before SCStream is configured,
+        // activates the shared audio subsystem and triggers SCStream
+        // -3805 "application connection interrupted" with a leaked task
+        // continuation. Keep the inputNode access inside startMic only.
         let screenFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                          sampleRate: 16000,
                                          channels: 1,
                                          interleaved: false)!
-        sounds["mic"] = try SoundAnalyzerWrapper(channel: "mic", writer: soundWriter, format: micFormat)
         sounds["screen"] = try SoundAnalyzerWrapper(channel: "screen", writer: soundWriter, format: screenFormat)
 
         try await startMic()
@@ -152,6 +150,7 @@ actor CaptureCoordinator {
     private func startMic() async throws {
         let input = micEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
+        sounds["mic"] = try SoundAnalyzerWrapper(channel: "mic", writer: soundWriter, format: inputFormat)
         let firstBufferLogged = ConvertOnce()
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
             guard let self else { return }
