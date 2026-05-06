@@ -8,7 +8,7 @@ gem 'sqlite3', '~> 2.0'
 gem 'sinatra', '~> 4.0'
 gem 'puma', '~> 6.4'
 gem 'faye-websocket', '~> 0.11'
-gem 'swift_gem', path: '../swift_gem'
+gem 'swift_gem', git: 'https://github.com/bash0C7/swift_gem'
 gem 'rb-natural-language-mac', path: '../rb-natural-language-mac'
 gem 'rb-foundation-model-mac', path: '../rb-foundation-model-mac'
 
