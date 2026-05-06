@@ -24,13 +24,17 @@ class TestFilterAudioState < Test::Unit::TestCase
 
   def test_rotated_event_loads_blob_and_emits_segment
     d = create_driver
+    started_at = 1000.0
+    ended_at = 1305.0
     d.run(default_tag: 'audio.state') do
       d.feed(Fluent::EventTime.now, {
         'ts' => Time.now.to_f,
         'kind' => 'rotated',
         'channel' => 'mic',
         'path' => @caf,
-        'bytes' => File.size(@caf)
+        'bytes' => File.size(@caf),
+        'started_at' => started_at,
+        'ended_at' => ended_at
       })
     end
     events = d.filtered_records
@@ -41,6 +45,23 @@ class TestFilterAudioState < Test::Unit::TestCase
     assert_equal File.binread(@caf).bytesize, rec['blob'].bytesize
     assert_equal 'aac', rec['codec']
     assert_equal 16000, rec['sample_rate']
+    assert_equal started_at, rec['started_at']
+    assert_equal ended_at, rec['ended_at']
+    assert_in_delta (ended_at - started_at), rec['duration_sec'], 0.001
+  end
+
+  def test_rotated_event_without_time_fields_is_dropped
+    d = create_driver
+    d.run(default_tag: 'audio.state') do
+      d.feed(Fluent::EventTime.now, {
+        'ts' => Time.now.to_f,
+        'kind' => 'rotated',
+        'channel' => 'mic',
+        'path' => @caf,
+        'bytes' => File.size(@caf)
+      })
+    end
+    assert_equal 0, d.filtered_records.size, 'rotated event without time fields must be dropped'
   end
 
   def test_non_rotated_events_are_dropped

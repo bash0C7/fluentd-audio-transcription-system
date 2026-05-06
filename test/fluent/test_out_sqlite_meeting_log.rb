@@ -70,6 +70,30 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
     end
   end
 
+  def test_final_persists_nonzero_started_and_ended_at
+    d = create_driver
+    started_at = 5000.123
+    ended_at = 5005.456
+    d.run(default_tag: 'audio.final') do
+      d.feed(Fluent::EventTime.now, {
+        'ch' => 'screen', 'kind' => 'final', 'text' => 'hello',
+        'started_at' => started_at, 'ended_at' => ended_at, 'language' => 'ja-JP',
+        'transcript_id' => 'u-final-time'
+      })
+    end
+    db = SQLite3::Database.new(@db_path, readonly: true)
+    db.results_as_hash = true
+    begin
+      row = db.execute('SELECT started_at, ended_at, language FROM transcripts WHERE swiftcap_transcript_id=?', ['u-final-time']).first
+      assert_not_nil row
+      assert_in_delta started_at, row['started_at'], 0.001
+      assert_in_delta ended_at, row['ended_at'], 0.001
+      assert_equal 'ja-JP', row['language']
+    ensure
+      db.close
+    end
+  end
+
   def test_segment_record_writes_blob_and_appends_ack
     d = create_driver
     blob = "FAKE CAF"
