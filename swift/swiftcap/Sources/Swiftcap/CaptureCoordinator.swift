@@ -35,8 +35,6 @@ actor CaptureCoordinator {
     }
     #endif
 
-    private static let targetFormat: AVAudioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
-
     init(spoolDir: URL) {
         self.spoolDir = spoolDir
         try? FileManager.default.createDirectory(at: spoolDir, withIntermediateDirectories: true)
@@ -55,9 +53,20 @@ actor CaptureCoordinator {
             try recorders[ch]?.start()
         }
 
-        for ch in ["mic", "screen"] {
-            sounds[ch] = try SoundAnalyzerWrapper(channel: ch, writer: soundWriter, format: Self.targetFormat)
-        }
+        // Per-channel SoundAnalyzerWrapper format: the mic side uses the
+        // AVAudioEngine input node's native format so the capture path can
+        // pass-through buffers without resampling (matches Apple's
+        // BringingAdvancedSpeechToTextCapabilitiesToYourApp sample, which
+        // feeds the transcriber's input format directly). The screen side
+        // stays at 16kHz mono Float32 because SCStreamConfiguration already
+        // requests that format from ScreenCaptureKit.
+        let micFormat = micEngine.inputNode.outputFormat(forBus: 0)
+        let screenFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                         sampleRate: 16000,
+                                         channels: 1,
+                                         interleaved: false)!
+        sounds["mic"] = try SoundAnalyzerWrapper(channel: "mic", writer: soundWriter, format: micFormat)
+        sounds["screen"] = try SoundAnalyzerWrapper(channel: "screen", writer: soundWriter, format: screenFormat)
 
         try await startMic()
         try await startScreen()
@@ -141,61 +150,28 @@ actor CaptureCoordinator {
     }
 
     private func startMic() async throws {
-        let format = Self.targetFormat
         let input = micEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
-        let converter = AVAudioConverter(from: inputFormat, to: format)
-        // Match Apple's BringingAdvancedSpeechToTextCapabilitiesToYourApp
-        // sample (BufferConverter.swift): `.none` priming avoids the first
-        // few samples being silently dropped — material for a 30s
-        // synthetic E5 window, where every transcript-frame counts.
-        converter?.primeMethod = .none
         let firstBufferLogged = ConvertOnce()
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
-            guard let self, let converter else { return }
+            guard let self else { return }
             if firstBufferLogged.fire() {
                 FileHandle.standardError.write(
                     "MicAudioOutput: first buffer received format=\(buffer.format) frameLength=\(buffer.frameLength)\n".data(using: .utf8)!
                 )
             }
-            // Pre-resample frame count must be derived from frameLength
-            // (actual data) not frameCapacity (allocation) — prior code
-            // sized the output by capacity AND fed the converter with a
-            // permanent `.haveData` callback, which produced empty output
-            // buffers (frameLength=0) and left SpeechAnalyzer with no
-            // mic-channel data. See BufferConversion.swift in the Apple
-            // sample for the canonical implementation.
-            let sampleRateRatio = format.sampleRate / inputFormat.sampleRate
-            let scaledOutFrames = Double(buffer.frameLength) * sampleRateRatio
-            let outFrameCapacity = AVAudioFrameCount(scaledOutFrames.rounded(.up))
-            guard outFrameCapacity > 0,
-                  let outBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: outFrameCapacity)
-            else { return }
-            var error: NSError?
-            // ConvertOnce is the Sendable-safe equivalent of the
-            // sample's local `var bufferProcessed = false` flag —
-            // strict concurrency rejects var captures in @Sendable
-            // closures, which the AVAudioConverter input block is.
-            let consumed = ConvertOnce()
-            let status = converter.convert(to: outBuffer, error: &error) { _, inputStatusPointer in
-                if consumed.fire() {
-                    inputStatusPointer.pointee = .haveData
-                    return buffer
-                }
-                inputStatusPointer.pointee = .noDataNow
-                return nil
-            }
-            guard status != .error else {
-                FileHandle.standardError.write(
-                    "MicAudioOutput: converter.convert error=\(String(describing: error))\n".data(using: .utf8)!
-                )
-                return
-            }
-            Task { await self.feed(channel: "mic", buffer: outBuffer, time: time) }
+            // Pass the native buffer through to all consumers. RotatingRecorder's
+            // AVAssetWriter encoder resamples to AAC HE 16kHz mono internally,
+            // TranscriberWrapper resamples once to its analyzerFormat on the
+            // SpeechAnalyzer side, and SoundAnalyzerWrapper is now initialized
+            // with this same native format. This eliminates the prior two-stage
+            // convert (input → 16kHz Float32 → analyzerFormat) that Apple's
+            // BringingAdvancedSpeechToTextCapabilitiesToYourApp sample avoids.
+            Task { await self.feed(channel: "mic", buffer: buffer, time: time) }
         }
         try micEngine.start()
         FileHandle.standardError.write(
-            "startMic: input running format=\(inputFormat) → \(format)\n".data(using: .utf8)!
+            "startMic: input running format=\(inputFormat) (native pass-through)\n".data(using: .utf8)!
         )
 
         // Loud failure if no buffer arrives within 5s — prevents silent silence
