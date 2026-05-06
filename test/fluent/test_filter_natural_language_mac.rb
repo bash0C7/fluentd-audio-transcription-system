@@ -59,4 +59,23 @@ class TestFilterNaturalLanguageMac < Test::Unit::TestCase
     refute_includes texts, 'の', 'single-char particle should be dropped by length>=2 filter'
     refute_includes texts, '録', 'single-char fragment should be dropped by length>=2 filter'
   end
+
+  def test_production_stopwords_yml_drops_japanese_filler_words
+    prod = File.expand_path('../../../config/stopwords.yml', __FILE__)
+    d = Fluent::Test::Driver::Filter.new(Fluent::Plugin::NaturalLanguageMacFilter)
+      .configure("stopwords_path #{prod}")
+    d.run(default_tag: 'audio.final') do
+      d.feed(Fluent::EventTime.now, {
+        'kind' => 'final',
+        'text' => 'うんちょっとですね、ありがとうござい、ますよね。',
+        'language' => 'ja'
+      })
+    end
+    rec = d.filtered_records.first
+    texts = rec['entities'].map { |e| e['text'] }
+    %w[うん ちょっと です ござい ます].each do |w|
+      refute_includes texts, w, "filler/auxiliary #{w} must be in production stopwords"
+    end
+    assert_includes texts, 'ありがとう', 'content word must be retained'
+  end
 end
