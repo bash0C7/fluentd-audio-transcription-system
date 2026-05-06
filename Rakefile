@@ -165,3 +165,16 @@ task :logs, [:name] do |_, args|
 end
 
 task default: :test
+
+namespace :test do
+  desc 'Run synthetic 30s mini-E5 acceptance: start:all → afplay 30s → stop:all → assert 5 layers'
+  task :e5_synthetic do
+    require_relative 'lib/audio_transcription/synthetic_e5'
+    failures = AudioTranscription::SyntheticE5.new.run
+    if failures.empty?
+      puts 'mini-E5 PASS — all 5 layers verified'
+    else
+      abort "mini-E5 FAIL:\n#{failures.join("\n")}"
+    end
+  end
+end
