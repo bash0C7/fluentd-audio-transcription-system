@@ -68,15 +68,17 @@ def stop_via_pidfile(name, wait_sec, has_screen: true)
 end
 
 namespace :start do
-  desc 'Start swiftcap (mic + screen capture daemon) in screen session "audio-swiftcap"'
+  desc 'Start swiftcap in screen session "audio-swiftcap" with PID file'
   task :swiftcap do
     unless File.executable?(SWIFTCAP_BIN)
       sh 'cd swift/swiftcap && swift build -c release'
     end
-    FileUtils.mkdir_p([SPOOL_DIR, LOG_DIR])
+    FileUtils.mkdir_p([SPOOL_DIR, LOG_DIR, RUN_DIR])
     locale = ENV['SWIFTCAP_LOCALE'] || 'ja-JP'
-    sh "screen -dmS audio-swiftcap bash -c 'SWIFTCAP_SPOOL=#{SPOOL_DIR} SWIFTCAP_LOCALE=#{locale} #{SWIFTCAP_BIN} > #{LOG_DIR}/swiftcap.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/swiftcap.log'"
-    puts "started: audio-swiftcap (log: #{LOG_DIR}/swiftcap.log)"
+    pidfile = File.join(RUN_DIR, 'swiftcap.pid')
+    sh "screen -dmS audio-swiftcap bash -c 'echo $$ > #{pidfile}; SWIFTCAP_SPOOL=#{SPOOL_DIR} SWIFTCAP_LOCALE=#{locale} exec #{SWIFTCAP_BIN} > #{LOG_DIR}/swiftcap.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/swiftcap.log'"
+    20.times { break if File.exist?(pidfile); sleep 0.2 }
+    puts "started: audio-swiftcap (pid=#{File.read(pidfile).strip rescue '?'}, log: #{LOG_DIR}/swiftcap.log)"
   end
 
   desc 'Start fluentd as daemon (writes pidfile via -d, no screen wrapping)'
@@ -105,14 +107,23 @@ namespace :start do
     puts "started: audio-web (log: #{LOG_DIR}/web.log → http://localhost:9292/)"
   end
 
-  desc 'Start all 3 services (swiftcap, fluentd, web)'
-  task all: %w[start:swiftcap start:fluentd start:web]
+  desc 'Start caffeinate (-dimsu) in screen session to prevent sleep during E5'
+  task :caffeinate do
+    FileUtils.mkdir_p([LOG_DIR, RUN_DIR])
+    pidfile = File.join(RUN_DIR, 'caffeinate.pid')
+    sh "screen -dmS audio-caffeinate bash -c 'echo $$ > #{pidfile}; exec caffeinate -dimsu > #{LOG_DIR}/caffeinate.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/caffeinate.log'"
+    20.times { break if File.exist?(pidfile); sleep 0.2 }
+    puts "started: audio-caffeinate (pid=#{File.read(pidfile).strip rescue '?'})"
+  end
+
+  desc 'Start all 4 services (swiftcap, fluentd, web, caffeinate)'
+  task all: %w[start:caffeinate start:swiftcap start:fluentd start:web]
 end
 
 namespace :stop do
-  desc 'Stop audio-web (graceful via puma pidfile)'
-  task :web do
-    stop_via_pidfile('web', WAIT_SEC['web'], has_screen: true)
+  desc 'Stop audio-swiftcap (graceful via pidfile + screen quit)'
+  task :swiftcap do
+    stop_via_pidfile('swiftcap', WAIT_SEC['swiftcap'], has_screen: true)
   end
 
   desc 'Stop fluentd (graceful via pidfile, no screen)'
@@ -120,8 +131,18 @@ namespace :stop do
     stop_via_pidfile('fluentd', WAIT_SEC['fluentd'], has_screen: false)
   end
 
-  desc 'Stop all 3 services'
-  task all: %w[stop:swiftcap stop:fluentd stop:web]
+  desc 'Stop audio-web (graceful via puma pidfile)'
+  task :web do
+    stop_via_pidfile('web', WAIT_SEC['web'], has_screen: true)
+  end
+
+  desc 'Stop audio-caffeinate (graceful via pidfile + screen quit)'
+  task :caffeinate do
+    stop_via_pidfile('caffeinate', WAIT_SEC['caffeinate'], has_screen: true)
+  end
+
+  desc 'Stop all 4 services in graceful order (swiftcap first stops new data; caffeinate last)'
+  task all: %w[stop:swiftcap stop:fluentd stop:web stop:caffeinate]
 end
 
 desc 'Show running audio-* screen sessions'
