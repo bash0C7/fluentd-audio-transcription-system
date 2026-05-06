@@ -1,15 +1,19 @@
 # web/assets/app.rb
 require 'js'
 
-# Graph init is currently disabled: 3d-force-graph's CDN bundle throws
-# `Cannot set properties of undefined (setting 'innerHTML')` during init in
-# this app's container. The transcript stream (Quick / Perfect panels) is
-# the core feature and must render regardless. Graph helpers below no-op
-# when GRAPH is nil.
-# TODO: pin a working three.js + 3d-force-graph version pair and re-enable.
+# Graph is built and configured inside JS (see window.createForceGraph in
+# index.erb). Two PicoRuby:wasm bridge limitations require this:
+# 1. JS::Object#call(arg) maps to Function.prototype.call(arg), binding
+#    arg as `this` instead of passing it positionally — so the factory
+#    pattern `ForceGraph3D()(elem)` can't be expressed in PicoRuby and
+#    must be invoked via a thin JS wrapper.
+# 2. Ruby Floats can't cross the JS bridge as arguments
+#    ("argument must be a String, Integer, or JS::Object") — so the
+#    configuration calls that need float values (e.g. linkOpacity(0.4))
+#    live inside the JS wrapper too.
 NODES = {}
 EDGES = {}
-GRAPH = nil
+GRAPH = JS.global.createForceGraph(JS.document.getElementById('graph-canvas'))
 
 QUICK_DIV   = JS.document.getElementById('quick-stream')
 PERFECT_DIV = JS.document.getElementById('perfect-stream')
