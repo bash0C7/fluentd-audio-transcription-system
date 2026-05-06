@@ -22,7 +22,7 @@ module Fluent
         return record unless record['kind'] == 'final'
         text = record['text'].to_s
         return record if text.empty?
-        lang = record['language'] || 'ja'
+        lang = (record['language'] || 'ja').to_s.split('-').first.downcase
         # NLTagger(.lexicalClass / .nameType) returns Other for every
         # Japanese token (verified empirically with xcrun swift), so we
         # rely on NLTokenizer + stopwords + length>=2 to populate

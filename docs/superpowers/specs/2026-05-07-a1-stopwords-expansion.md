@@ -64,17 +64,24 @@ README literal release 品質水準 (3 ペイン live + 実会議 / `say -v Kyok
 
 | Round | 種別 | 内容 |
 |---|---|---|
-| RED | test | `test/fluent/test_filter_natural_language_mac.rb` に **production `config/stopwords.yml` を直接 load** する spec を追加し、 機能語が drop される + content word は残ることを assert |
-| GREEN | config | `config/stopwords.yml` の `ja:` セクションに 16 語追加 |
+| RED-A | test | `test/fluent/test_filter_natural_language_mac.rb` に **production `config/stopwords.yml` を直接 load** する spec を追加し、 機能語が drop される + content word は残ることを assert |
+| GREEN-A | config | `config/stopwords.yml` の `ja:` セクションに 16 語追加 |
+| RED-B | test | `language='ja-JP'` (BCP-47 locale) で同等動作を assert する spec 追加 |
+| GREEN-B | filter (1 行) | `filter_natural_language_mac.rb` で `lang.split('-').first.downcase` 正規化 |
 
-R は config-only refactor 寄りなので REFACTOR commit はスキップ可。
+### Scope 拡張 (Round B)
+
+実装中に発見: 実環境 swiftcap は `language='ja-JP'` を emit、 filter は `@stopwords[lang]` で lookup → `ja-JP` key 不在で **全 stopword が miss、 ja stopwords 0 件適用** という pre-existing bug。 Round A 単独では release 品質水準への寄与 0 (config 増やしても lookup miss)。 Round B で 1 行 normalize 追加し scope 拡張。 Filter 経路 (entry point 1 line) のみ touch、 SCStream / AVAudioEngine / SpeechAnalyzer / fluentd / SQLite / WebSocket / PicoRuby いずれにも regression 経路なし。
+
+R は config + 1 行 refactor 寄りなので 別 REFACTOR commit はスキップ可。
 
 ## Files to modify
 
 | path | 変更 |
 |---|---|
-| `test/fluent/test_filter_natural_language_mac.rb` | production stopwords.yml load する spec 追加 |
+| `test/fluent/test_filter_natural_language_mac.rb` | production stopwords.yml load + ja-JP locale spec |
 | `config/stopwords.yml` | ja: に 16 語追加 |
+| `lib/fluent/plugin/filter_natural_language_mac.rb` | language code 正規化 1 行 (`.split('-').first.downcase`) |
 
 ## 検証ゴール (完了前必達条件チェック)
 
