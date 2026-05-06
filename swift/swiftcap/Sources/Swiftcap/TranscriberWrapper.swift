@@ -6,6 +6,7 @@ import Speech
 @available(macOS 26.0, *)
 final class TranscriberWrapper: @unchecked Sendable {
     private let channel: String
+    private let locale: Locale
     private let quickWriter: SpoolWriter
     private let finalWriter: SpoolWriter
     private let analyzer: SpeechAnalyzer
@@ -23,6 +24,7 @@ final class TranscriberWrapper: @unchecked Sendable {
 
     init(channel: String, locale: Locale, quickWriter: SpoolWriter, finalWriter: SpoolWriter) async throws {
         self.channel = channel
+        self.locale = locale
         self.quickWriter = quickWriter
         self.finalWriter = finalWriter
         self.transcriber = SpeechTranscriber(
@@ -57,17 +59,23 @@ final class TranscriberWrapper: @unchecked Sendable {
                 for try await result in self.transcriber.results {
                     let transcriptId = UUID().uuidString
                     let text = String(result.text.characters)
+                    let now = Date().timeIntervalSince1970
+                    let startedAt = result.range.start.seconds
+                    let endedAt = result.range.end.seconds
                     if result.isFinal {
                         try? self.finalWriter.append([
-                            "ts": Date().timeIntervalSince1970,
+                            "ts": now,
                             "ch": self.channel,
                             "kind": "final",
                             "text": text,
+                            "started_at": startedAt,
+                            "ended_at": endedAt,
+                            "language": self.locale.identifier(.bcp47),
                             "transcript_id": transcriptId
                         ])
                     } else {
                         try? self.quickWriter.append([
-                            "ts": Date().timeIntervalSince1970,
+                            "ts": now,
                             "ch": self.channel,
                             "kind": "volatile",
                             "text": text,
