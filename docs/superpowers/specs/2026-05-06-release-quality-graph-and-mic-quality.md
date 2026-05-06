@@ -89,6 +89,7 @@ R3 は既存テスト (mini-E5 5/5、swift test 9/9) を keep する純粋 refac
 - mini-E5 5x (release binary rebuild 後の `mini-e5-5x-r3c.log`): **4/5 PASS** (run 1 のみ L4 ack-count timing flake、 R3 と無関係の既存 hardening 課題で次バージョン送り)
 - 30s 実会議 (YouTube バックグラウンド + 自分の声、 `realmeeting-30s.log`): SQLite に transcripts 611 (mic 203 + screen 408)、 entities 162、 entity_edges 904 が追記
 - Chrome `localhost:9292` 描画: Perfect ペインに final 200 件、 Graph canvas 1222x863 + edges 500 描画。 sample edge `うん <-> 松田 weight=1`
+- **`say -v Kyoko こんにちは` 検証 (2026-05-07 P1)**: README:57 で明記された 2 つ目の検証パス。 起動 → `say -v Kyoko 'こんにちは。これはリリース品質確認のためのテストです。'` ×2 → SCStream screen channel が捕捉 → SpeechAnalyzer が transcript 613 (raw_text に「こんにちは」 verbatim) を生成 → NaturalLanguageMacFilter が entities `こんにちは` (id=190) `テスト` (id=186) を抽出 → entity_edges に `こんにちは ↔ アニメ/テレビ/です/テスト/ため/確認/品質/これ` 8 件追記 → Chrome `localhost:9292` で Quick/Perfect/Graph 3 ペイン全描画 + canvas 1222x864、 DOM に「こんにちは」 verbatim 出現を `document.body.innerText.includes('こんにちは')=true` で確認。 これで README literal release 品質水準 (実会議 + say -v Kyoko の **両方**) を物理的に達成。
 
 実装の途中 R3 で `let micFormat = micEngine.inputNode.outputFormat(forBus: 0)` を `start(locale:)` に持ち上げた版が **SCStream -3805 "アプリケーション接続中断" + Swift Task Continuation MISUSE** を引き起こし screen channel が 0-byte 録音となって mini-E5 5/5 fail。 `inputNode` access を `startMic` 内に閉じる fix (commit `e92a84a`) で解消、 v3 と同等の起動順序を保ちつつ二段 convert 廃止の効果も維持した。
 
