@@ -91,7 +91,7 @@ namespace :start do
 
   desc 'Start puma web server in screen session "audio-web"'
   task web: 'db:migrate' do
-    FileUtils.mkdir_p([LOG_DIR, File.dirname(DB_PATH)])
+    FileUtils.mkdir_p([LOG_DIR, RUN_DIR, File.dirname(DB_PATH)])
     sh "screen -dmS audio-web bash -c 'cd #{REPO_ROOT} && DB_PATH=#{DB_PATH} bundle exec puma -C web/puma.rb web/config.ru > #{LOG_DIR}/web.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/web.log'"
     puts "started: audio-web (log: #{LOG_DIR}/web.log → http://localhost:9292/)"
   end
@@ -101,20 +101,9 @@ namespace :start do
 end
 
 namespace :stop do
-  # Process names hosted in each screen session — so we can SIGTERM them
-  # directly and let the child run its cleanup (e.g. AVAssetWriter
-  # finishWriting) before the screen session is torn down.
-  GRACEFUL_PROCS = { 'swiftcap' => 'swiftcap', 'fluentd' => 'fluentd', 'web' => 'puma' }
-
-  %w[swiftcap fluentd web].each do |name|
-    desc "Stop audio-#{name} screen session (graceful SIGTERM, then session quit)"
-    task name.to_sym do
-      proc_name = GRACEFUL_PROCS.fetch(name)
-      system("pkill -TERM -x #{proc_name}")
-      sleep 3
-      ok = system("screen -X -S audio-#{name} quit")
-      puts ok ? "stopped: audio-#{name}" : "audio-#{name} was not running"
-    end
+  desc 'Stop audio-web (graceful via puma pidfile)'
+  task :web do
+    stop_via_pidfile('web', WAIT_SEC['web'], has_screen: true)
   end
 
   desc 'Stop all 3 services'
