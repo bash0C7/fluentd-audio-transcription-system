@@ -57,9 +57,17 @@ namespace :start do
 end
 
 namespace :stop do
+  # Process names hosted in each screen session — so we can SIGTERM them
+  # directly and let the child run its cleanup (e.g. AVAssetWriter
+  # finishWriting) before the screen session is torn down.
+  GRACEFUL_PROCS = { 'swiftcap' => 'swiftcap', 'fluentd' => 'fluentd', 'web' => 'puma' }
+
   %w[swiftcap fluentd web].each do |name|
-    desc "Stop audio-#{name} screen session"
+    desc "Stop audio-#{name} screen session (graceful SIGTERM, then session quit)"
     task name.to_sym do
+      proc_name = GRACEFUL_PROCS.fetch(name)
+      system("pkill -TERM -x #{proc_name}")
+      sleep 3
       ok = system("screen -X -S audio-#{name} quit")
       puts ok ? "stopped: audio-#{name}" : "audio-#{name} was not running"
     end
