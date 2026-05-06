@@ -79,14 +79,23 @@ namespace :start do
     puts "started: audio-swiftcap (log: #{LOG_DIR}/swiftcap.log)"
   end
 
-  desc 'Start fluentd in screen session "audio-fluentd"'
+  desc 'Start fluentd as daemon (writes pidfile via -d, no screen wrapping)'
   task fluentd: 'db:migrate' do
-    FileUtils.mkdir_p([SPOOL_DIR, LOG_DIR, File.dirname(DB_PATH)])
+    FileUtils.mkdir_p([SPOOL_DIR, LOG_DIR, RUN_DIR, File.dirname(DB_PATH)])
     %w[quick.jsonl final.jsonl sound.jsonl state.jsonl].each do |f|
       FileUtils.touch(File.join(SPOOL_DIR, f))
     end
-    sh "screen -dmS audio-fluentd bash -c 'cd #{REPO_ROOT} && SPOOL_DIR=#{SPOOL_DIR} DB_PATH=#{DB_PATH} bundle exec fluentd -c config/fluent.conf -p lib/fluent/plugin > #{LOG_DIR}/fluentd.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/fluentd.log'"
-    puts "started: audio-fluentd (log: #{LOG_DIR}/fluentd.log)"
+    pidfile = File.join(RUN_DIR, 'fluentd.pid')
+    File.delete(pidfile) if File.exist?(pidfile) && !process_alive?(File.read(pidfile).to_i)
+    abort "fluentd appears to be running (pid=#{File.read(pidfile)})" if File.exist?(pidfile)
+    sh({
+      'SPOOL_DIR' => SPOOL_DIR,
+      'DB_PATH' => DB_PATH
+    }, "bundle exec fluentd -c config/fluent.conf -p lib/fluent/plugin -d #{pidfile} -o #{LOG_DIR}/fluentd.log")
+    # fluentd -d backgrounds itself; rake's sh returns when daemonization completes.
+    20.times { break if File.exist?(pidfile); sleep 0.2 }
+    abort "fluentd failed to write pidfile" unless File.exist?(pidfile)
+    puts "started: fluentd (pid=#{File.read(pidfile)}, log: #{LOG_DIR}/fluentd.log)"
   end
 
   desc 'Start puma web server in screen session "audio-web"'
@@ -104,6 +113,11 @@ namespace :stop do
   desc 'Stop audio-web (graceful via puma pidfile)'
   task :web do
     stop_via_pidfile('web', WAIT_SEC['web'], has_screen: true)
+  end
+
+  desc 'Stop fluentd (graceful via pidfile, no screen)'
+  task :fluentd do
+    stop_via_pidfile('fluentd', WAIT_SEC['fluentd'], has_screen: false)
   end
 
   desc 'Stop all 3 services'
