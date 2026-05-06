@@ -98,25 +98,33 @@ final class TranscriberWrapper: @unchecked Sendable {
         if buffer.format.isEqual(analyzerFormat) { return buffer }
         if converter == nil {
             converter = AVAudioConverter(from: buffer.format, to: analyzerFormat)
+            converter?.primeMethod = .none
         }
         guard let converter else { return nil }
-        let inSr = buffer.format.sampleRate
-        let outSr = analyzerFormat.sampleRate
-        let outCapacity = AVAudioFrameCount(Double(buffer.frameCapacity) * outSr / inSr)
+        // Mirror BufferConversion.swift in the Apple sample app: size the
+        // output by frameLength (actual data) × sample-rate ratio, and
+        // signal `.noDataNow` after the single input buffer is consumed
+        // so the converter terminates cleanly without hanging on
+        // perceived end-of-stream.
+        let sampleRateRatio = analyzerFormat.sampleRate / buffer.format.sampleRate
+        let scaledOutFrames = Double(buffer.frameLength) * sampleRateRatio
+        let outCapacity = AVAudioFrameCount(scaledOutFrames.rounded(.up))
         guard outCapacity > 0,
               let out = AVAudioPCMBuffer(pcmFormat: analyzerFormat, frameCapacity: outCapacity)
         else { return nil }
         var err: NSError?
+        // ConvertOnce is Sendable-safe; strict concurrency disallows
+        // capturing `var` flags in the @Sendable input block.
         let consumed = ConvertOnce()
-        converter.convert(to: out, error: &err) { _, status in
+        let status = converter.convert(to: out, error: &err) { _, inputStatusPointer in
             if consumed.fire() {
-                status.pointee = .haveData
+                inputStatusPointer.pointee = .haveData
                 return buffer
             }
-            status.pointee = .endOfStream
+            inputStatusPointer.pointee = .noDataNow
             return nil
         }
-        return err == nil ? out : nil
+        return status != .error ? out : nil
     }
 
     func finalize() async throws {

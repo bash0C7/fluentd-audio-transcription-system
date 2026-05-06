@@ -2,12 +2,21 @@
 require 'sinatra/base'
 require 'sqlite3'
 require 'json'
+require 'digest'
 require 'faye/websocket'
 require 'eventmachine'
 
 class TranscriptionWeb < Sinatra::Base
   set :public_folder, File.expand_path('assets', __dir__)
   set :views, File.expand_path('views', __dir__)
+  # Cache-busting query for /app.rb: PicoRuby:wasm caches the fetched
+  # Ruby source as bytecode in the browser. Sinatra's static serve for
+  # /app.rb only emits ETag, which browsers can still use to revalidate
+  # but the Workers/Service Worker layer in some setups can serve a
+  # stale bundle. Embedding a content hash in the URL forces a new fetch
+  # on every deploy. Computed once at process boot; restart updates it.
+  set :app_rb_version,
+      Digest::SHA256.hexdigest(File.read(File.expand_path('assets/app.rb', __dir__)))[0, 12]
 
   WEBSOCKETS = []
 

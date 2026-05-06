@@ -145,19 +145,51 @@ actor CaptureCoordinator {
         let input = micEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: inputFormat, to: format)
+        // Match Apple's BringingAdvancedSpeechToTextCapabilitiesToYourApp
+        // sample (BufferConverter.swift): `.none` priming avoids the first
+        // few samples being silently dropped — material for a 30s
+        // synthetic E5 window, where every transcript-frame counts.
+        converter?.primeMethod = .none
         let firstBufferLogged = ConvertOnce()
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
-            guard let self else { return }
+            guard let self, let converter else { return }
             if firstBufferLogged.fire() {
                 FileHandle.standardError.write(
-                    "MicAudioOutput: first buffer received format=\(buffer.format)\n".data(using: .utf8)!
+                    "MicAudioOutput: first buffer received format=\(buffer.format) frameLength=\(buffer.frameLength)\n".data(using: .utf8)!
                 )
             }
-            let outBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameCapacity)!
+            // Pre-resample frame count must be derived from frameLength
+            // (actual data) not frameCapacity (allocation) — prior code
+            // sized the output by capacity AND fed the converter with a
+            // permanent `.haveData` callback, which produced empty output
+            // buffers (frameLength=0) and left SpeechAnalyzer with no
+            // mic-channel data. See BufferConversion.swift in the Apple
+            // sample for the canonical implementation.
+            let sampleRateRatio = format.sampleRate / inputFormat.sampleRate
+            let scaledOutFrames = Double(buffer.frameLength) * sampleRateRatio
+            let outFrameCapacity = AVAudioFrameCount(scaledOutFrames.rounded(.up))
+            guard outFrameCapacity > 0,
+                  let outBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: outFrameCapacity)
+            else { return }
             var error: NSError?
-            converter?.convert(to: outBuffer, error: &error) { _, status in
-                status.pointee = .haveData
-                return buffer
+            // ConvertOnce is the Sendable-safe equivalent of the
+            // sample's local `var bufferProcessed = false` flag —
+            // strict concurrency rejects var captures in @Sendable
+            // closures, which the AVAudioConverter input block is.
+            let consumed = ConvertOnce()
+            let status = converter.convert(to: outBuffer, error: &error) { _, inputStatusPointer in
+                if consumed.fire() {
+                    inputStatusPointer.pointee = .haveData
+                    return buffer
+                }
+                inputStatusPointer.pointee = .noDataNow
+                return nil
+            }
+            guard status != .error else {
+                FileHandle.standardError.write(
+                    "MicAudioOutput: converter.convert error=\(String(describing: error))\n".data(using: .utf8)!
+                )
+                return
             }
             Task { await self.feed(channel: "mic", buffer: outBuffer, time: time) }
         }
