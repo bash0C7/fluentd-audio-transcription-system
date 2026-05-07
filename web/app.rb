@@ -3,6 +3,7 @@ require 'sinatra/base'
 require 'sqlite3'
 require 'json'
 require 'digest'
+require 'fileutils'
 require 'faye/websocket'
 require 'eventmachine'
 
@@ -120,6 +121,67 @@ class TranscriptionWeb < Sinatra::Base
       ws.rack_response
     else
       halt 426
+    end
+  end
+
+  class RetranscribeWorker
+    def initialize(db_path:, run_dir:, spawn: nil)
+      @db_path = db_path
+      @run_dir = run_dir
+      @spawn = spawn || ->(sid) {
+        Process.spawn('swiftcap', 'retranscribe', '--session-id', sid.to_s,
+                      out: STDOUT, err: STDERR)
+      }
+      FileUtils.mkdir_p(@run_dir)
+    end
+
+    def pick_one
+      db = SQLite3::Database.new(@db_path)
+      begin
+        row = db.get_first_row(<<~SQL)
+          SELECT id FROM sessions WHERE status='finalized'
+          ORDER BY ended_at ASC LIMIT 1
+        SQL
+        return nil unless row
+        sid = row[0]
+        pidfile = File.join(@run_dir, "retranscribe-#{sid}.pid")
+        if File.exist?(pidfile) && pid_alive?(File.read(pidfile).to_i)
+          return sid
+        end
+        db.execute("UPDATE sessions SET status='transcribing' WHERE id=?", [sid])
+        pid = @spawn.call(sid)
+        File.write(pidfile, pid.to_s)
+        Process.detach(pid) if pid > 0
+        sid
+      ensure
+        db.close
+      end
+    end
+
+    private
+
+    def pid_alive?(pid)
+      return false if pid <= 0
+      Process.kill(0, pid)
+      true
+    rescue Errno::ESRCH, Errno::EPERM
+      false
+    end
+  end
+end
+
+unless ENV['SKIP_RETRANSCRIBE_WORKER']
+  Thread.new do
+    worker = TranscriptionWeb::RetranscribeWorker.new(
+      db_path: ENV.fetch('DB_PATH', 'db/meeting_log.sqlite'),
+      run_dir: File.expand_path('../tmp/run', __dir__))
+    loop do
+      begin
+        worker.pick_one
+      rescue StandardError => e
+        warn "retranscribe worker error: #{e.class}: #{e.message}"
+      end
+      sleep 5
     end
   end
 end
