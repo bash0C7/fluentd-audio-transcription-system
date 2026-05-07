@@ -81,7 +81,13 @@ bundle exec rake stop:all       # 全停止
 ```bash
 bundle exec rake test         # Ruby 側ユニットテスト
 cd swift/swiftcap && swift test  # Swift 側ユニットテスト
+bundle exec rake test:e5_synthetic  # mini-E5 5 層 acceptance (合成入力)
 ```
+
+## 状態とロードマップ
+
+- 上記「確認」 の 2 つの動作確認パス (実会議 + `say -v Kyoko こんにちは`) は **verified** 状態。 詳細 evidence は `docs/superpowers/specs/2026-05-06-release-quality-graph-and-mic-quality.md` および `docs/superpowers/specs/2026-05-07-a1-stopwords-expansion.md` の "Verification 結果" セクション。
+- 次バージョン候補 / 残課題は `docs/superpowers/specs/2026-05-07-next-version-backlog.md` の冒頭「必達条件 (絶対必須)」 と「推奨される次の一手」 を参照。
 
 ## ライセンス
 
