@@ -4,7 +4,16 @@
   <meta charset="utf-8">
   <title>Audio Transcription</title>
   <link rel="stylesheet" href="/style.css">
+  <!-- three must be loaded as a window global *before* three-spritetext so
+       the sprite library can resolve THREE.CanvasTexture / THREE.Sprite.
+       3d-force-graph 1.73.4 ships its own bundled THREE (not exposed via
+       its public API), so the externally-loaded THREE is consumed only by
+       three-spritetext. The Sprite produced by external THREE still works
+       inside 3d-force-graph's scene because THREE.js uses duck-typed
+       flags (.isSprite, .isObject3D) for renderer dispatch. -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three-spritetext@1/dist/three-spritetext.min.js"></script>
   <script>
     // Bridge for PicoRuby:wasm: JS::Object#call(arg) maps to
     // Function.prototype.call(arg) which binds arg as `this`, not as the
@@ -15,11 +24,38 @@
     // PicoRuby's JS bridge can't pass Ruby Floats as arguments
     // (TypeError: "argument must be a String, Integer, or JS::Object"),
     // so we configure the graph fully inside JS — including
-    // linkOpacity(0.4) — and return the ready-to-use instance.
+    // linkOpacity(0.4), nodeThreeObject sprite text, and nodeLabel —
+    // and return the ready-to-use instance.
+    //
+    // Default 3d-force-graph reads .nodeLabel('name') for hover tooltips
+    // and renders nodes as plain colored spheres. Our nodes only carry
+    // `id` (the entity text), so without overrides the graph is visually
+    // unidentifiable. We attach a SpriteText to every node so the entity
+    // text floats next to the sphere, and we point nodeLabel at `id` so
+    // hover tooltips also show the human-readable string.
     window.createForceGraph = function (elem) {
       return ForceGraph3D()(elem)
         .nodeAutoColorBy('group')
-        .linkOpacity(0.4);
+        .nodeLabel('id')
+        .linkOpacity(0.4)
+        .nodeThreeObjectExtend(true)
+        .nodeThreeObject(function (node) {
+          // Float a SpriteText above the sphere so the entity text is
+          // readable on zoom-in. Without depthTest=false the sprite is
+          // occluded by the sphere mesh that nodeThreeObjectExtend(true)
+          // also keeps in scene. Offset y=10 lifts the label clear of
+          // the sphere even at default camera distance.
+          const sprite = new SpriteText(node.id);
+          sprite.color = node.color || '#ffffff';
+          sprite.textHeight = 8;
+          sprite.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+          sprite.padding = 2;
+          sprite.position.y = 10;
+          sprite.material.depthTest = false;
+          sprite.material.depthWrite = false;
+          sprite.renderOrder = 999;
+          return sprite;
+        });
     };
     // Same float-bridge limitation: pass a serializable plain payload
     // and let JS perform the graphData call with the JS Numbers.
