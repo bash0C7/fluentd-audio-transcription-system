@@ -58,6 +58,25 @@ class TranscriptionWeb < Sinatra::Base
     { status: 'queued' }.to_json
   end
 
+  get '/api/session/current' do
+    content_type :json
+    row = db.get_first_row(<<~SQL)
+      SELECT id, started_at, ended_at, status FROM sessions
+      WHERE status='active' ORDER BY started_at DESC LIMIT 1
+    SQL
+    halt 404 unless row
+    row.to_json
+  end
+
+  get '/api/session/recent' do
+    content_type :json
+    rows = db.execute(<<~SQL, [10])
+      SELECT id, started_at, ended_at, status FROM sessions
+      ORDER BY started_at DESC LIMIT ?
+    SQL
+    rows.to_json
+  end
+
   get '/' do
     erb :index
   end
