@@ -26,7 +26,6 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
       .configure(<<~CONF)
         db_path #{@db_path}
         ack_path #{@ack_path}
-        session_gap_seconds 600
       CONF
   end
 
@@ -44,14 +43,19 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
     end
   end
 
-  def test_writes_final_creates_session_and_transcript
+  def test_writes_final_creates_transcript_and_entities
     d = create_driver
     now = Time.now.to_f
-    d.run(default_tag: 'audio.final') do
-      d.feed(Fluent::EventTime.now, {
+    sat = now - 100.0
+    d.run do
+      d.feed('audio.state', Fluent::EventTime.now, {
+        'kind' => 'session_started', 'session_started_at' => sat, 'ts' => sat
+      })
+      d.feed('audio.final', Fluent::EventTime.now, {
         'ch' => 'mic', 'kind' => 'final', 'text' => 'こんにちは',
         'started_at' => now, 'ended_at' => now + 1.0, 'language' => 'ja',
         'transcript_id' => 'u-final-1', 'polished_text' => 'こんにちは。',
+        'session_started_at' => sat,
         'entities' => [{'text' => 'こんにちは', 'kind' => 'term'}]
       })
     end
@@ -119,14 +123,27 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
     assert_match(Regexp.new(Regexp.escape(path)), ack_lines.first)
   end
 
-  def test_session_gap_creates_new_session
+  def test_session_started_at_creates_distinct_sessions_per_started_at
     d = create_driver
     t0 = 1000.0
-    d.run(default_tag: 'audio.final') do
-      d.feed(Fluent::EventTime.now, { 'ch' => 'mic', 'kind' => 'final', 'text' => 'a',
-                   'started_at' => t0, 'ended_at' => t0 + 1, 'transcript_id' => 'a' })
-      d.feed(Fluent::EventTime.now, { 'ch' => 'mic', 'kind' => 'final', 'text' => 'b',
-                          'started_at' => t0 + 1000, 'ended_at' => t0 + 1001, 'transcript_id' => 'b' })
+    t1 = 2000.0
+    d.run do
+      d.feed('audio.state', Fluent::EventTime.now, {
+        'kind' => 'session_started', 'session_started_at' => t0, 'ts' => t0
+      })
+      d.feed('audio.state', Fluent::EventTime.now, {
+        'kind' => 'session_started', 'session_started_at' => t1, 'ts' => t1
+      })
+      d.feed('audio.final', Fluent::EventTime.now, {
+        'ch' => 'mic', 'kind' => 'final', 'text' => 'a',
+        'started_at' => t0 + 1, 'ended_at' => t0 + 2,
+        'session_started_at' => t0, 'transcript_id' => 'a'
+      })
+      d.feed('audio.final', Fluent::EventTime.now, {
+        'ch' => 'mic', 'kind' => 'final', 'text' => 'b',
+        'started_at' => t1 + 1, 'ended_at' => t1 + 2,
+        'session_started_at' => t1, 'transcript_id' => 'b'
+      })
     end
     db = SQLite3::Database.new(@db_path, readonly: true)
     begin
