@@ -33,6 +33,7 @@ README が定義する release 品質水準は明確で 1 行しかない:
 | **P1: README literal release 品質水準** (`say -v Kyoko こんにちは` で 3 ペイン live + transcript + entities + edges) | `e52eff0`、 `2026-05-06-release-quality-graph-and-mic-quality.md` "Verification 結果" | README 2 つ目の検証パスを物理達成、 必達条件 baseline 確立 |
 | **A1: stopwords 拡充** (機能語 16 語追加 + BCP-47 locale 正規化 + UTF-8 encoding tag) | merge `5898517`、 `2026-05-07-a1-stopwords-expansion.md` | Graph perceived quality 向上 (機能語 leak 0 件)、 隠れ encoding bug 2 件解消 |
 | **B (P2): mini-E5 single-run-must-pass** | `23c6a60` (deferred-policy 記録)、 § B 参照 | baseline 計測 5/5 PASS、 B1/B2/B3 実装不要 |
+| **Graph キャプション human-readable 化** (SpriteText 常時表示 + nodeLabel hover、 frontend のみ) | `c57a54f` | 「描画されとるけど判別不可能」 状態を解消、 ノードラベル (日本語 entity 文字列) が常時可視 |
 
 ## 残課題一覧 (採用判断は個別 spec で実施)
 
