@@ -393,6 +393,51 @@ run 5 mini-E5 PASS — all 5 layers verified
 fluentd ack / ライブ transcript / Graph entity-edges) のいずれにも
 regression を作っていないことを確認。
 
+### 30s 実会議 + Chrome MCP browser-driven E2E 検証 (2026-05-07)
+
+ブラウザ (Claude Code の Chrome MCP) から `localhost:9292` を操作、
+ユーザがバックグラウンドで YouTube + マイク発話を 30 秒以上流した
+状態で完走確認:
+
+| layer | 観測 |
+|---|---|
+| Page render | session control bar に Session #19 開始 14:34 ●REC + recent badges 表示 |
+| 初期 GET /api/session/current | active session を返却、 ヘッダ反映 |
+| 初期 GET /api/session/recent | 5 件 badge 表示 (新 session が最上位) |
+| JS 「区切る」 click | spool/control.jsonl に `{kind:"boundary"}` append |
+| swiftcap ControlReader | 500ms 以内に検知、 mic+screen rotate (reason:"boundary") |
+| state.jsonl `session_finalized` + `session_started` | prev sat と new sat を別々に発火 |
+| fluentd → SQLite | sessions[N].status='finalized', sessions[N+1].INSERT (active) |
+| Sinatra worker | 'finalized' 検出 → `swiftcap retranscribe --session-id N` を Process.spawn (pidfile mutex) |
+| swiftcap retranscribe | session の audio_segments.blob を tmp CAF 展開 → SpeechAnalyzer.start(inputSequence:) で連投 → final.jsonl pass=2 行を append → state.jsonl `retranscribe_done` |
+| fluentd → SQLite | pass=2 行を INSERT (UPDATE せず別 row として共存)、 session.status='done' |
+| WebSocket push | session_started / session_finalized / retranscribe_done が UI に届き、 ヘッダ + badges (🟡 finalized → ⏳ transcribing → ✅ done) で観察可能 |
+| JS 「ミュート」 click | spool/control.jsonl `{kind:"mute_toggle"}` → swiftcap mute_changed event (mic_muted true⇄false toggle) |
+
+エビデンス: session 19 で 16 件 pass=1 + 17 件 pass=2 が共存、 audio_segments.session_id が正しく FK されている。
+
+検証中に発見・修正した integration バグ 5 件は別 commit (`dfdb756`)
+にまとめて記録。 内訳:
+
+1. `Rakefile` start:web に SPOOL_DIR + SWIFTCAP_BIN env を渡しとらん
+   かったので web が default パス (~/Library/...) に書こうとして silent
+   fail
+2. `RetranscribeWorker` の `Process.spawn` が SWIFTCAP_SPOOL / DB_PATH
+   を子に伝播しとらんで swiftcap retranscribe が default パスを開いて
+   `NSCocoaErrorDomain Code=4`
+3. `RetranscribeWorker` が spawn 失敗時に status='transcribing' を
+   巻き戻さないので無限 retry に突入
+4. `out_sqlite_meeting_log.handle_final` が record['session_id'] (retranscribe が直接渡す数値 ID) を accept しとらんかったので pass=2
+   行が session_id=NULL で INSERT
+5. `web/assets/app.rb post_control` が PicoRuby:wasm の fetch shim と
+   不整合 (`JS::Bridge.to_js` 経由 + `.then` chain → Ruby Hash 直渡し +
+   block 形式が必須)。 button click が silently 落ちとった
+
+これらは全て **integration 層のバグ** (単体テストでは検出できない)
+で、 ライブ Chrome 操作 + DB inspection を組み合わせた今回の検証で
+初めて発覚した。 unit test 56/56 + swift test 21/21 はそのまま green
+を維持。
+
 別 branch `feat/long-form-retranscribe-2026-05-06` の F spec とは設計上の
 重複があるが、 本 spec が上位互換 (session 単位 vs audio_segment 単位)。
 F branch の spec は履歴として残しつつ、 Phase 2 で audio_segment 単位
