@@ -365,6 +365,34 @@ backlog 必達条件チェックを **着手前 / 完了前** の双方で実施
 main へ本 spec を merge してから着手すること。 新 branch:
 `feat/web-session-control-and-rollover-2026-05-07`。
 
+---
+
+## Verification 結果
+
+### Test suites (2026-05-07)
+
+- `bundle exec rake test`: **56/56 PASS** (134 assertions, 0 failures)
+- `swift test` from `swift/swiftcap/`: **21/21 PASS** in 9 suites (incl. real-fixture
+  retranscribe integration test that exercises SpeechAnalyzer + AVAudioConverter
+  + AsyncStream end-to-end with `synthetic_e5_audio.aiff`)
+
+### mini-E5 5-run baseline regression (2026-05-07)
+
+Log: `tmp/longrun/e5-session-control-baseline.log`
+
+```
+run 1 mini-E5 PASS — all 5 layers verified
+run 2 mini-E5 PASS — all 5 layers verified
+run 3 mini-E5 PASS — all 5 layers verified
+run 4 mini-E5 PASS — all 5 layers verified
+run 5 mini-E5 PASS — all 5 layers verified
+```
+
+**5/5 PASS**, 必達条件 (≥4/5) クリア。 schema migration / fluentd plugin
+書き換え / swiftcap session lifecycle 追加が L1-L5 (CAF RMS / pos /
+fluentd ack / ライブ transcript / Graph entity-edges) のいずれにも
+regression を作っていないことを確認。
+
 別 branch `feat/long-form-retranscribe-2026-05-06` の F spec とは設計上の
 重複があるが、 本 spec が上位互換 (session 単位 vs audio_segment 単位)。
 F branch の spec は履歴として残しつつ、 Phase 2 で audio_segment 単位
