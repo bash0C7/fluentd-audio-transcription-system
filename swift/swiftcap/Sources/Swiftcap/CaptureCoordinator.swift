@@ -22,6 +22,7 @@ actor CaptureCoordinator {
     // ARC-released as soon as addStreamOutput returns, and ScreenCaptureKit
     // would log "streamOutput NOT found. Dropping frame" for every buffer.
     private var screenAudioOutput: ScreenAudioOutput?
+    let sessions: SessionTracker
 
     // Tracks whether the screen channel is currently capturing. Set true after
     // startScreen succeeds, cleared by handleScreenStreamStopped or shutdownRotate.
@@ -35,8 +36,9 @@ actor CaptureCoordinator {
     }
     #endif
 
-    init(spoolDir: URL) {
+    init(spoolDir: URL, sessions: SessionTracker = SessionTracker()) {
         self.spoolDir = spoolDir
+        self.sessions = sessions
         try? FileManager.default.createDirectory(at: spoolDir, withIntermediateDirectories: true)
         self.stateWriter = SpoolWriter(url: spoolDir.appendingPathComponent("state.jsonl"))
         self.quickWriter = SpoolWriter(url: spoolDir.appendingPathComponent("quick.jsonl"))
@@ -45,11 +47,22 @@ actor CaptureCoordinator {
     }
 
     func start(locale: Locale) async throws {
+        let sat = await sessions.currentSessionStartedAt
+        try? stateWriter.append([
+            "ts": Date().timeIntervalSince1970,
+            "kind": "session_started",
+            "session_started_at": sat
+        ])
+
         for ch in ["mic", "screen"] {
             recorders[ch] = RotatingRecorder(channel: ch, spoolDir: spoolDir)
-            transcribers[ch] = try await TranscriberWrapper(channel: ch, locale: locale,
-                                                            quickWriter: quickWriter,
-                                                            finalWriter: finalWriter)
+            transcribers[ch] = try await TranscriberWrapper(
+                channel: ch, locale: locale,
+                quickWriter: quickWriter,
+                finalWriter: finalWriter,
+                sessionStartedAtProvider: { [weak self] in
+                    await self?.sessions.currentSessionStartedAt ?? 0
+                })
             try recorders[ch]?.start()
         }
 
@@ -126,6 +139,7 @@ actor CaptureCoordinator {
                 }
             }
         FileHandle.standardError.write("rotate[\(channel)]: finalize done bytes=\(finalized.bytes)\n".data(using: .utf8)!)
+        let sat = await sessions.currentSessionStartedAt
         try? stateWriter.append([
             "ts": Date().timeIntervalSince1970,
             "kind": "rotated",
@@ -134,6 +148,7 @@ actor CaptureCoordinator {
             "bytes": finalized.bytes,
             "started_at": finalized.startedAt,
             "ended_at": finalized.endedAt,
+            "session_started_at": sat,
             "reason": reason
         ])
     }

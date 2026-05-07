@@ -9,6 +9,7 @@ final class TranscriberWrapper: @unchecked Sendable {
     private let locale: Locale
     private let quickWriter: SpoolWriter
     private let finalWriter: SpoolWriter
+    let sessionStartedAtProvider: @Sendable () async -> TimeInterval
     private let analyzer: SpeechAnalyzer
     private let transcriber: SpeechTranscriber
     // SpeechAnalyzer's required input format is queried at init time via
@@ -22,11 +23,13 @@ final class TranscriberWrapper: @unchecked Sendable {
     // on it exactly once.
     private let continuation: AsyncStream<AnalyzerInput>.Continuation
 
-    init(channel: String, locale: Locale, quickWriter: SpoolWriter, finalWriter: SpoolWriter) async throws {
+    init(channel: String, locale: Locale, quickWriter: SpoolWriter, finalWriter: SpoolWriter,
+         sessionStartedAtProvider: @escaping @Sendable () async -> TimeInterval = { 0 }) async throws {
         self.channel = channel
         self.locale = locale
         self.quickWriter = quickWriter
         self.finalWriter = finalWriter
+        self.sessionStartedAtProvider = sessionStartedAtProvider
         self.transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
@@ -62,6 +65,7 @@ final class TranscriberWrapper: @unchecked Sendable {
                     let now = Date().timeIntervalSince1970
                     let startedAt = result.range.start.seconds
                     let endedAt = result.range.end.seconds
+                    let sat = await self.sessionStartedAtProvider()
                     if result.isFinal {
                         try? self.finalWriter.append([
                             "ts": now,
@@ -71,7 +75,8 @@ final class TranscriberWrapper: @unchecked Sendable {
                             "started_at": startedAt,
                             "ended_at": endedAt,
                             "language": self.locale.identifier(.bcp47),
-                            "transcript_id": transcriptId
+                            "transcript_id": transcriptId,
+                            "session_started_at": sat
                         ])
                     } else {
                         try? self.quickWriter.append([
@@ -79,7 +84,8 @@ final class TranscriberWrapper: @unchecked Sendable {
                             "ch": self.channel,
                             "kind": "volatile",
                             "text": text,
-                            "transcript_id": transcriptId
+                            "transcript_id": transcriptId,
+                            "session_started_at": sat
                         ])
                     }
                 }
