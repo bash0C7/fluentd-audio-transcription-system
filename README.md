@@ -69,6 +69,8 @@ bundle exec rake stop:all       # 全停止
 
 個別の `start:swiftcap` / `start:fluentd` / `start:web`、停止は対応する `stop:<name>`。spool は `./spool/`、DB は `./db/meeting_log.sqlite`、ログは `./tmp/log/` に出る（すべて gitignored）。
 
+> **rake 経由起動が前提**: `start:web` は web プロセスに `SPOOL_DIR` / `SWIFTCAP_BIN` / `DB_PATH` を環境変数で渡している。これらが無いと `POST /api/session/boundary` が default の `~/Library/Application Support/...` を見にいったり、`retranscribe` worker が `swiftcap` バイナリを `PATH` 上で見つけられず `Errno::ENOENT` で失敗する。直接 `bundle exec puma -C web/puma.rb web/config.ru` で立ち上げる場合は同じ env を手で export すること。
+
 ## 設計上の選択
 
 - 翻訳しない（日本語/英語そのまま）
