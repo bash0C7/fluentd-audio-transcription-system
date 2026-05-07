@@ -84,7 +84,11 @@ module Fluent
       def handle_final(record)
         return unless record['kind'] == 'final'
         sat = record['session_started_at']&.to_f
-        session_id = sat ? ensure_session_by_started_at(sat) : nil
+        session_id = if sat
+                       ensure_session_by_started_at(sat)
+                     elsif record['session_id']
+                       record['session_id'].to_i
+                     end
         pass = (record['pass'] || 1).to_i
         sql = <<~SQL
           INSERT INTO transcripts(audio_segment_id, session_id, channel, speaker,

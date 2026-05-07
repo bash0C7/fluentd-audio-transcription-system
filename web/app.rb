@@ -129,7 +129,12 @@ class TranscriptionWeb < Sinatra::Base
       @db_path = db_path
       @run_dir = run_dir
       @spawn = spawn || ->(sid) {
-        Process.spawn('swiftcap', 'retranscribe', '--session-id', sid.to_s,
+        bin = ENV.fetch('SWIFTCAP_BIN', 'swiftcap')
+        env = {
+          'SWIFTCAP_SPOOL' => ENV['SPOOL_DIR'],
+          'DB_PATH' => ENV['DB_PATH']
+        }.compact
+        Process.spawn(env, bin, 'retranscribe', '--session-id', sid.to_s,
                       out: STDOUT, err: STDERR)
       }
       FileUtils.mkdir_p(@run_dir)
@@ -149,9 +154,15 @@ class TranscriptionWeb < Sinatra::Base
           return sid
         end
         db.execute("UPDATE sessions SET status='transcribing' WHERE id=?", [sid])
-        pid = @spawn.call(sid)
-        File.write(pidfile, pid.to_s)
-        Process.detach(pid) if pid > 0
+        begin
+          pid = @spawn.call(sid)
+          File.write(pidfile, pid.to_s)
+          Process.detach(pid) if pid > 0
+        rescue StandardError => e
+          db.execute("UPDATE sessions SET status='finalized' WHERE id=?", [sid])
+          File.delete(pidfile) if File.exist?(pidfile)
+          raise e
+        end
         sid
       ensure
         db.close

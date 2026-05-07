@@ -112,10 +112,11 @@ end
 # Session control helpers
 
 def post_control(path)
-  # JS::Bridge.to_js converts a Ruby hash to a JS object (same pattern as
-  # redraw_graph uses for graph data). This allows passing method:'POST' to fetch.
-  opts = JS::Bridge.to_js({ method: 'POST' })
-  JS.global.fetch(path, opts)
+  # PicoRuby's fetch shim is `call_fetch_with_json_options` — it accepts a
+  # Ruby Hash for the second arg and serializes it internally to a JS RequestInit.
+  # Pre-converting via JS::Bridge.to_js produces a JS object that fails the JS-side
+  # RequestInit type check. Block form is required (no Promise.then chaining).
+  JS.global.fetch(path, { method: 'POST' }) { |_| nil }
 end
 
 def update_session_header(id, started_at, status)
