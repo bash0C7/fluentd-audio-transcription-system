@@ -9,3 +9,34 @@ h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing
 #perfect-stream .line.mic    { border-color: #4aa3ff; background: #1a2230; }
 #perfect-stream .line.screen { border-color: #ff8e6b; background: #2a1f1a; }
 #graph-canvas { width: 100%; height: calc(100vh - 60px); }
+
+.session-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #111;
+  color: #eee;
+  font-size: 13px;
+  z-index: 100;
+}
+.session-bar .session-label { font-weight: bold; }
+.session-bar .rec-state { color: #f55; }
+.session-bar .rec-state.muted { color: #888; }
+.session-bar button {
+  padding: 4px 10px;
+  background: #333;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.session-bar button:hover { background: #444; }
+.session-bar button[data-muted="true"] { background: #663; }
+.session-bar .recent-sessions { margin-left: auto; font-size: 11px; opacity: 0.8; }
+.session-bar .recent-sessions .badge { margin-right: 6px; }
+body { padding-top: 40px; }

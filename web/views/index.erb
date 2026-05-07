@@ -67,6 +67,14 @@
   <script src="https://cdn.jsdelivr.net/npm/@picoruby/wasm-wasi@latest/dist/init.iife.js"></script>
 </head>
 <body>
+  <header class="session-bar">
+    <span class="session-label">Session #<span id="session-id">--</span></span>
+    <span class="session-started" id="session-started">--</span>
+    <span class="rec-state" id="rec-state">●REC</span>
+    <button id="boundary-btn" type="button">区切る</button>
+    <button id="mute-btn" type="button" data-muted="false">🎤 ミュート</button>
+    <span class="recent-sessions" id="recent-sessions"></span>
+  </header>
   <div id="app">
     <div id="quick">  <h2>Quick</h2>   <div id="quick-stream"></div>   </div>
     <div id="perfect"><h2>Perfect</h2> <div id="perfect-stream"></div> </div>
