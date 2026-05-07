@@ -116,6 +116,37 @@ actor CaptureCoordinator {
         recorders.removeAll()
     }
 
+    /// Called when the user presses 区切る in the web UI. Finalizes all active
+    /// recorders for the current session, advances SessionTracker to a new
+    /// session_started_at, restarts recorders so the next CAF rotation belongs
+    /// to the new session, and emits session_finalized + session_started state
+    /// events. The just-finalized session_started_at is what the web worker
+    /// will look up to spawn `swiftcap retranscribe`.
+    func handleBoundary(now: TimeInterval = Date().timeIntervalSince1970) async {
+        for (ch, recorder) in recorders {
+            await rotate(channel: ch, recorder: recorder, reason: "boundary")
+        }
+        let prevSat = await sessions.rollover(now: now)
+        try? stateWriter.append([
+            "ts": now,
+            "kind": "session_finalized",
+            "session_started_at": prevSat,
+            "ended_at": now
+        ])
+        try? stateWriter.append([
+            "ts": now,
+            "kind": "session_started",
+            "session_started_at": now
+        ])
+        for ch in ["mic", "screen"] {
+            recorders[ch] = RotatingRecorder(channel: ch, spoolDir: spoolDir)
+            try? recorders[ch]?.start()
+        }
+    }
+
+    /// Stub — implemented in Task 8.
+    func handleMuteToggle() async {}
+
     func acknowledgeAndDelete(paths: [String]) {
         for p in paths {
             let url = URL(fileURLWithPath: p)

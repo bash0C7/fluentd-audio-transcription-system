@@ -53,6 +53,27 @@ struct Swiftcap {
             }
         }
 
+        let controlReader = ControlReader(
+            controlURL: spoolDir.appendingPathComponent("control.jsonl"),
+            posURL: spoolDir.appendingPathComponent(".pos.control"))
+        Task {
+            while true {
+                if let events = try? controlReader.readNew(), !events.isEmpty {
+                    for ev in events {
+                        switch ev["kind"] as? String {
+                        case "boundary":
+                            await coordinator.handleBoundary()
+                        case "mute_toggle":
+                            await coordinator.handleMuteToggle()
+                        default:
+                            FileHandle.standardError.write("control: unknown kind \(ev)\n".data(using: .utf8)!)
+                        }
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+
         try? await Task.sleep(nanoseconds: UInt64.max)
     }
 }
