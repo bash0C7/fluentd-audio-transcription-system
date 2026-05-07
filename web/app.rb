@@ -30,6 +30,32 @@ class TranscriptionWeb < Sinatra::Base
         d.results_as_hash = true
       end
     end
+
+    def spool_dir
+      ENV.fetch('SPOOL_DIR',
+        '/Users/bash/Library/Application Support/audio-transcription/spool')
+    end
+
+    def append_control(kind)
+      path = File.join(spool_dir, 'control.jsonl')
+      File.open(path, 'a') do |f|
+        f.write({ ts: Time.now.to_f, kind: kind }.to_json + "\n")
+      end
+    end
+  end
+
+  post '/api/session/boundary' do
+    append_control('boundary')
+    status 202
+    content_type :json
+    { status: 'queued' }.to_json
+  end
+
+  post '/api/session/mute' do
+    append_control('mute_toggle')
+    status 202
+    content_type :json
+    { status: 'queued' }.to_json
   end
 
   get '/' do
