@@ -6,8 +6,14 @@ module Fluent
     class AudioStateFilter < Fluent::Plugin::Filter
       Fluent::Plugin.register_filter('audio_state', self)
 
+      SESSION_KINDS = %w[session_started session_finalized mute_changed retranscribe_done].freeze
+
       def filter(_tag, _time, record)
-        return nil unless record['kind'] == 'rotated'
+        kind = record['kind']
+        if SESSION_KINDS.include?(kind)
+          return record
+        end
+        return nil unless kind == 'rotated'
         path = record['path']
         return nil unless path && File.file?(path)
         unless record['started_at'] && record['ended_at']
@@ -17,7 +23,7 @@ module Fluent
         blob = File.binread(path)
         started_at = record['started_at'].to_f
         ended_at = record['ended_at'].to_f
-        {
+        out = {
           'channel' => record['channel'],
           'path' => path,
           'started_at' => started_at,
@@ -28,6 +34,8 @@ module Fluent
           'bytes' => blob.bytesize,
           'blob' => blob
         }
+        out['session_started_at'] = record['session_started_at'].to_f if record['session_started_at']
+        out
       end
     end
   end
