@@ -14,15 +14,13 @@ module Fluent
       def configure(conf)
         super
         # fluentd boots with `-Eascii-8bit:ascii-8bit`, which makes
-        # YAML.load_file tag strings as ASCII-8BIT. Set membership is
-        # encoding-aware, so ASCII-8BIT 'けど' != UTF-8 'けど' and the
-        # NLTokenizer's UTF-8 tokens silently miss. Force-tag every
-        # stopword as UTF-8 so Set#include? matches regardless of host
-        # process default encoding.
+        # YAML/json strings ASCII-8BIT. Set#include? is encoding-aware
+        # so ASCII-8BIT 'けど' != UTF-8 'けど' and the NLTokenizer's
+        # UTF-8 tokens silently miss. Re-tag every external string as
+        # UTF-8 via force_utf8 below.
         data = YAML.load_file(@stopwords_path) || {}
-        @stopwords = {}
-        data.each do |lang, words|
-          @stopwords[lang.to_s] = (words || []).map { |w| w.to_s.dup.force_encoding(Encoding::UTF_8).downcase }.to_set
+        @stopwords = data.transform_keys(&:to_s).transform_values do |words|
+          (words || []).map { |w| force_utf8(w).downcase }.to_set
         end
       end
 
@@ -30,11 +28,7 @@ module Fluent
         return record unless record['kind'] == 'final'
         text = record['text'].to_s
         return record if text.empty?
-        lang = (record['language'] || 'ja').to_s.split('-').first.downcase
-        # The token stream from NLTokenizer is always UTF-8, but record
-        # values arriving from fluentd's @type json may be ASCII-8BIT
-        # under -Eascii-8bit. Force lookup keys to UTF-8 too.
-        lang = lang.dup.force_encoding(Encoding::UTF_8)
+        lang = force_utf8(record['language'] || 'ja').split('-').first.downcase
         # NLTagger(.lexicalClass / .nameType) returns Other for every
         # Japanese token (verified empirically with xcrun swift), so we
         # rely on NLTokenizer + stopwords + length>=2 to populate
@@ -47,6 +41,12 @@ module Fluent
           { 'text' => token, 'kind' => 'term' }
         end
         record.merge('entities' => words)
+      end
+
+      private
+
+      def force_utf8(s)
+        s.to_s.dup.force_encoding(Encoding::UTF_8)
       end
     end
   end
