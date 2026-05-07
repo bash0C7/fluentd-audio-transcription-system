@@ -23,4 +23,22 @@ struct CaptureCoordinatorBoundaryTests {
         let started = lines.first { $0.contains("session_started") && $0.contains("\"session_started_at\":2000") }
         #expect(started != nil)
     }
+
+    @Test func handleMuteToggleFlipsAndEmitsEvent() async throws {
+        guard #available(macOS 26.0, *) else { return }
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mute-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tracker = SessionTracker(now: 1000.0)
+        let coord = CaptureCoordinator(spoolDir: tmp, sessions: tracker)
+        await coord.handleMuteToggle()
+        let muted1 = await tracker.isMicMuted
+        #expect(muted1)
+        await coord.handleMuteToggle()
+        let muted2 = await tracker.isMicMuted
+        #expect(!muted2)
+        let raw = (try? String(contentsOf: tmp.appendingPathComponent("state.jsonl"), encoding: .utf8)) ?? ""
+        #expect(raw.contains("\"kind\":\"mute_changed\""))
+    }
 }

@@ -144,8 +144,39 @@ actor CaptureCoordinator {
         }
     }
 
-    /// Stub — implemented in Task 8.
-    func handleMuteToggle() async {}
+    /// Toggle mic-channel mute. SessionTracker holds the flag; the live mic
+    /// AVAudioEngine tap is removed/reinstalled so no buffers reach the
+    /// recorder/transcriber/sound analyzer for the mic channel during mute.
+    /// Screen channel and current session_started_at are unaffected.
+    func handleMuteToggle() async {
+        let nowMuted = await sessions.toggleMute()
+        let sat = await sessions.currentSessionStartedAt
+        if micEngine.isRunning {
+            if nowMuted {
+                micEngine.inputNode.removeTap(onBus: 0)
+            } else {
+                installMicTap()
+            }
+        }
+        try? stateWriter.append([
+            "ts": Date().timeIntervalSince1970,
+            "kind": "mute_changed",
+            "session_started_at": sat,
+            "mic_muted": nowMuted
+        ])
+    }
+
+    /// Extracted from startMic() so handleMuteToggle can re-install the tap
+    /// after an unmute. Engine itself is not stopped — installTap is enough
+    /// to resume buffer flow.
+    private func installMicTap() {
+        let input = micEngine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
+            guard let self else { return }
+            Task { await self.feed(channel: "mic", buffer: buffer, time: time) }
+        }
+    }
 
     func acknowledgeAndDelete(paths: [String]) {
         for p in paths {
