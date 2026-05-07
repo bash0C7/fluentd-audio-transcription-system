@@ -13,7 +13,6 @@ module Fluent
       config_param :db_path, :string
       config_param :ack_path, :string, default: nil
       config_param :webhook_url, :string, default: nil
-      config_param :session_gap_seconds, :integer, default: 600
 
       def configure(conf)
         super
@@ -30,7 +29,14 @@ module Fluent
       def process(tag, es)
         es.each do |_time, record|
           case tag
-          when 'audio.state'    then handle_segment(record)
+          when 'audio.state'
+            case record['kind']
+            when 'session_started'   then handle_session_started(record)
+            when 'session_finalized' then handle_session_finalized(record)
+            when 'mute_changed'      then handle_mute_changed(record)
+            when 'retranscribe_done' then handle_retranscribe_done(record)
+            else                          handle_segment(record)
+            end
           when 'audio.final'    then handle_final(record)
           when 'audio.sound'    then handle_sound(record)
           when 'audio.quick'    then handle_quick(record)
@@ -44,43 +50,81 @@ module Fluent
         notify('quick', record)
       end
 
+      def handle_session_started(record)
+        sat = record['session_started_at']&.to_f
+        return unless sat
+        ensure_session_by_started_at(sat)
+        notify('session_started', { 'session_started_at' => sat,
+                                    'session_id' => session_id_for(sat) })
+      end
+
+      def handle_session_finalized(record)
+        sat = record['session_started_at']&.to_f
+        return unless sat
+        ended_at = record['ended_at']&.to_f
+        sid = ensure_session_by_started_at(sat)
+        @db.execute("UPDATE sessions SET ended_at=?, status='finalized' WHERE id=?",
+                    [ended_at, sid])
+        notify('session_finalized', { 'session_started_at' => sat,
+                                       'session_id' => sid, 'ended_at' => ended_at })
+      end
+
+      def handle_mute_changed(record)
+        notify('mute_changed', record)
+      end
+
+      def handle_retranscribe_done(record)
+        sat = record['session_started_at']&.to_f
+        sid = sat ? session_id_for(sat) : record['session_id']&.to_i
+        return unless sid
+        @db.execute("UPDATE sessions SET status='done' WHERE id=?", [sid])
+        notify('retranscribe_done', { 'session_id' => sid })
+      end
+
       def handle_final(record)
         return unless record['kind'] == 'final'
-        session_id = ensure_session(record['ch'], record['ended_at'].to_f)
+        sat = record['session_started_at']&.to_f
+        session_id = if sat
+                       ensure_session_by_started_at(sat)
+                     elsif record['session_id']
+                       record['session_id'].to_i
+                     end
+        pass = (record['pass'] || 1).to_i
         sql = <<~SQL
           INSERT INTO transcripts(audio_segment_id, session_id, channel, speaker,
                                   started_at, ended_at, language, raw_text,
-                                  polished_text, swiftcap_transcript_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  polished_text, swiftcap_transcript_id, pass)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL
         @db.execute(sql, [
-          nil, session_id, record['ch'], speaker_for(record['ch']),
+          record['audio_segment_id'], session_id, record['ch'], speaker_for(record['ch']),
           record['started_at'].to_f, record['ended_at'].to_f, record['language'],
-          record['text'], record['polished_text'], record['transcript_id']
+          record['text'], record['polished_text'], record['transcript_id'], pass
         ])
         transcript_id = @db.last_insert_row_id
         (record['entities'] || []).each do |e|
-          ent_sql = <<~SQL
+          @db.execute(<<~SQL, [transcript_id, e['text'], e['kind'], record['ended_at'].to_f])
             INSERT INTO entities(transcript_id, text, kind, observed_at)
             VALUES (?, ?, ?, ?)
           SQL
-          @db.execute(ent_sql, [transcript_id, e['text'], e['kind'], record['ended_at'].to_f])
         end
         update_edges(record['entities'] || [], record['ended_at'].to_f)
-        notify('final', record.merge('id' => transcript_id))
+        notify('final', record.merge('id' => transcript_id, 'pass' => pass))
       end
 
       def handle_segment(record)
         return unless record['blob']
+        sat = record['session_started_at']&.to_f
+        session_id = sat ? ensure_session_by_started_at(sat) : nil
         sql = <<~SQL
           INSERT INTO audio_segments(channel, started_at, ended_at, duration_sec,
-                                     codec, sample_rate, bytes, blob)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                     codec, sample_rate, bytes, blob, session_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL
         @db.execute(sql, [
           record['channel'], record['started_at'].to_f, record['ended_at'].to_f,
           record['duration_sec'].to_f, record['codec'], record['sample_rate'].to_i,
-          record['bytes'].to_i, SQLite3::Blob.new(record['blob'])
+          record['bytes'].to_i, SQLite3::Blob.new(record['blob']), session_id
         ])
         if @ack_path && record['path']
           File.open(@ack_path, 'a') do |f|
@@ -105,17 +149,17 @@ module Fluent
         notify('sound', record)
       end
 
-      def ensure_session(channel, ended_at)
-        row = @db.get_first_row(
-          "SELECT id, ended_at FROM sessions ORDER BY id DESC LIMIT 1"
-        )
-        if row && row[1] && (ended_at - row[1].to_f) < @session_gap_seconds
-          @db.execute("UPDATE sessions SET ended_at=? WHERE id=?", [ended_at, row[0]])
-          row[0]
-        else
-          @db.execute("INSERT INTO sessions(started_at, ended_at) VALUES (?, ?)", [ended_at, ended_at])
-          @db.last_insert_row_id
-        end
+      def ensure_session_by_started_at(started_at)
+        row = @db.get_first_row('SELECT id FROM sessions WHERE started_at=?', [started_at])
+        return row[0] if row
+        @db.execute('INSERT INTO sessions(started_at, status) VALUES (?, ?)',
+                    [started_at, 'active'])
+        @db.last_insert_row_id
+      end
+
+      def session_id_for(started_at)
+        row = @db.get_first_row('SELECT id FROM sessions WHERE started_at=?', [started_at])
+        row && row[0]
       end
 
       def speaker_for(channel)
@@ -127,13 +171,12 @@ module Fluent
         return if texts.size < 2
         texts.combination(2).each do |a, b|
           src, dst = [a, b].sort
-          edge_sql = <<~SQL
+          @db.execute(<<~SQL, [src, dst, observed_at, observed_at])
             INSERT INTO entity_edges(src, dst, weight, last_observed_at)
             VALUES (?, ?, 1.0, ?)
             ON CONFLICT(src, dst) DO UPDATE
               SET weight = weight + 1.0, last_observed_at = ?
           SQL
-          @db.execute(edge_sql, [src, dst, observed_at, observed_at])
         end
       end
 

@@ -103,7 +103,7 @@ namespace :start do
   desc 'Start puma web server in screen session "audio-web"'
   task web: 'db:migrate' do
     FileUtils.mkdir_p([LOG_DIR, RUN_DIR, File.dirname(DB_PATH)])
-    sh "screen -dmS audio-web bash -c 'cd #{REPO_ROOT} && DB_PATH=#{DB_PATH} bundle exec puma -C web/puma.rb web/config.ru > #{LOG_DIR}/web.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/web.log'"
+    sh "screen -dmS audio-web bash -c 'cd #{REPO_ROOT} && DB_PATH=#{DB_PATH} SPOOL_DIR=#{SPOOL_DIR} SWIFTCAP_BIN=#{SWIFTCAP_BIN} bundle exec puma -C web/puma.rb web/config.ru > #{LOG_DIR}/web.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/web.log'"
     puts "started: audio-web (log: #{LOG_DIR}/web.log → http://localhost:9292/)"
   end
 

@@ -22,6 +22,7 @@ actor CaptureCoordinator {
     // ARC-released as soon as addStreamOutput returns, and ScreenCaptureKit
     // would log "streamOutput NOT found. Dropping frame" for every buffer.
     private var screenAudioOutput: ScreenAudioOutput?
+    let sessions: SessionTracker
 
     // Tracks whether the screen channel is currently capturing. Set true after
     // startScreen succeeds, cleared by handleScreenStreamStopped or shutdownRotate.
@@ -35,8 +36,9 @@ actor CaptureCoordinator {
     }
     #endif
 
-    init(spoolDir: URL) {
+    init(spoolDir: URL, sessions: SessionTracker = SessionTracker()) {
         self.spoolDir = spoolDir
+        self.sessions = sessions
         try? FileManager.default.createDirectory(at: spoolDir, withIntermediateDirectories: true)
         self.stateWriter = SpoolWriter(url: spoolDir.appendingPathComponent("state.jsonl"))
         self.quickWriter = SpoolWriter(url: spoolDir.appendingPathComponent("quick.jsonl"))
@@ -45,11 +47,22 @@ actor CaptureCoordinator {
     }
 
     func start(locale: Locale) async throws {
+        let sat = await sessions.currentSessionStartedAt
+        try? stateWriter.append([
+            "ts": Date().timeIntervalSince1970,
+            "kind": "session_started",
+            "session_started_at": sat
+        ])
+
         for ch in ["mic", "screen"] {
             recorders[ch] = RotatingRecorder(channel: ch, spoolDir: spoolDir)
-            transcribers[ch] = try await TranscriberWrapper(channel: ch, locale: locale,
-                                                            quickWriter: quickWriter,
-                                                            finalWriter: finalWriter)
+            transcribers[ch] = try await TranscriberWrapper(
+                channel: ch, locale: locale,
+                quickWriter: quickWriter,
+                finalWriter: finalWriter,
+                sessionStartedAtProvider: { [weak self] in
+                    await self?.sessions.currentSessionStartedAt ?? 0
+                })
             try recorders[ch]?.start()
         }
 
@@ -103,6 +116,68 @@ actor CaptureCoordinator {
         recorders.removeAll()
     }
 
+    /// Called when the user presses 区切る in the web UI. Finalizes all active
+    /// recorders for the current session, advances SessionTracker to a new
+    /// session_started_at, restarts recorders so the next CAF rotation belongs
+    /// to the new session, and emits session_finalized + session_started state
+    /// events. The just-finalized session_started_at is what the web worker
+    /// will look up to spawn `swiftcap retranscribe`.
+    func handleBoundary(now: TimeInterval = Date().timeIntervalSince1970) async {
+        for (ch, recorder) in recorders {
+            await rotate(channel: ch, recorder: recorder, reason: "boundary")
+        }
+        let prevSat = await sessions.rollover(now: now)
+        try? stateWriter.append([
+            "ts": now,
+            "kind": "session_finalized",
+            "session_started_at": prevSat,
+            "ended_at": now
+        ])
+        try? stateWriter.append([
+            "ts": now,
+            "kind": "session_started",
+            "session_started_at": now
+        ])
+        for ch in ["mic", "screen"] {
+            recorders[ch] = RotatingRecorder(channel: ch, spoolDir: spoolDir)
+            try? recorders[ch]?.start()
+        }
+    }
+
+    /// Toggle mic-channel mute. SessionTracker holds the flag; the live mic
+    /// AVAudioEngine tap is removed/reinstalled so no buffers reach the
+    /// recorder/transcriber/sound analyzer for the mic channel during mute.
+    /// Screen channel and current session_started_at are unaffected.
+    func handleMuteToggle() async {
+        let nowMuted = await sessions.toggleMute()
+        let sat = await sessions.currentSessionStartedAt
+        if micEngine.isRunning {
+            if nowMuted {
+                micEngine.inputNode.removeTap(onBus: 0)
+            } else {
+                installMicTap()
+            }
+        }
+        try? stateWriter.append([
+            "ts": Date().timeIntervalSince1970,
+            "kind": "mute_changed",
+            "session_started_at": sat,
+            "mic_muted": nowMuted
+        ])
+    }
+
+    /// Extracted from startMic() so handleMuteToggle can re-install the tap
+    /// after an unmute. Engine itself is not stopped — installTap is enough
+    /// to resume buffer flow.
+    private func installMicTap() {
+        let input = micEngine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
+            guard let self else { return }
+            Task { await self.feed(channel: "mic", buffer: buffer, time: time) }
+        }
+    }
+
     func acknowledgeAndDelete(paths: [String]) {
         for p in paths {
             let url = URL(fileURLWithPath: p)
@@ -126,6 +201,7 @@ actor CaptureCoordinator {
                 }
             }
         FileHandle.standardError.write("rotate[\(channel)]: finalize done bytes=\(finalized.bytes)\n".data(using: .utf8)!)
+        let sat = await sessions.currentSessionStartedAt
         try? stateWriter.append([
             "ts": Date().timeIntervalSince1970,
             "kind": "rotated",
@@ -134,6 +210,7 @@ actor CaptureCoordinator {
             "bytes": finalized.bytes,
             "started_at": finalized.startedAt,
             "ended_at": finalized.endedAt,
+            "session_started_at": sat,
             "reason": reason
         ])
     }

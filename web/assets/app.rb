@@ -98,8 +98,83 @@ ws.addEventListener('message') do |event|
     last[:textContent] = payload[:text].to_s if last
   when 'edge'
     upsert_edge(payload[:src].to_s, payload[:dst].to_s, payload[:weight].to_f)
+  when 'session_started'
+    update_session_header(payload[:session_id].to_s, payload[:session_started_at].to_i, 'active')
+  when 'session_finalized'
+    refresh_recent_sessions
+  when 'mute_changed'
+    update_mute_button(payload[:mic_muted].to_s == 'true')
+  when 'retranscribe_done'
+    refresh_recent_sessions
   end
 end
+
+# Session control helpers
+
+def post_control(path)
+  # PicoRuby's fetch shim is `call_fetch_with_json_options` — it accepts a
+  # Ruby Hash for the second arg and serializes it internally to a JS RequestInit.
+  # Pre-converting via JS::Bridge.to_js produces a JS object that fails the JS-side
+  # RequestInit type check. Block form is required (no Promise.then chaining).
+  JS.global.fetch(path, { method: 'POST' }) { |_| nil }
+end
+
+def update_session_header(id, started_at, status)
+  JS.document.getElementById('session-id')[:textContent] = id.to_s
+  if started_at && started_at != 0
+    t = JS.global[:Date].new(started_at * 1000)
+    JS.document.getElementById('session-started')[:textContent] = "開始 #{t.toLocaleTimeString.to_s}"
+  end
+  rec = JS.document.getElementById('rec-state')
+  rec[:textContent] = status == 'active' ? '●REC' : status.to_s
+end
+
+def update_mute_button(muted)
+  btn = JS.document.getElementById('mute-btn')
+  btn[:dataset][:muted] = muted ? 'true' : 'false'
+  btn[:textContent] = muted ? '🔇 ミュート中' : '🎤 ミュート'
+  rec = JS.document.getElementById('rec-state')
+  rec[:className] = muted ? 'rec-state muted' : 'rec-state'
+end
+
+def refresh_recent_sessions
+  JS.global.fetch('/api/session/recent') do |resp|
+    resp.json.then do |arr|
+      el = JS.document.getElementById('recent-sessions')
+      el[:innerHTML] = ''
+      arr.to_a.first(5).each do |s|
+        sym = case s[:status].to_s
+              when 'transcribing' then "⏳"
+              when 'done'         then "✅"
+              when 'finalized'    then '🟡'
+              else                     "●"
+              end
+        span = JS.document.createElement('span')
+        span[:className] = 'badge'
+        span[:textContent] = "##{s[:id]} #{sym}"
+        el.appendChild(span)
+      end
+    end
+  end
+end
+
+# Bind session control button click handlers
+JS.document.getElementById('boundary-btn').addEventListener('click') do |_ev|
+  post_control('/api/session/boundary')
+end
+JS.document.getElementById('mute-btn').addEventListener('click') do |_ev|
+  post_control('/api/session/mute')
+end
+
+# Bootstrap session header from current session
+JS.global.fetch('/api/session/current') do |resp|
+  if resp[:ok].to_s == 'true'
+    resp.json.then do |s|
+      update_session_header(s[:id].to_s, s[:started_at].to_i, s[:status].to_s)
+    end
+  end
+end
+refresh_recent_sessions
 
 # Initial bootstrap from /api/recent.
 # PicoRuby's JS::Object#fetch shim requires the block form (not Promise#then),
