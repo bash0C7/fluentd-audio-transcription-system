@@ -5,6 +5,25 @@ import Foundation
 @main
 struct Swiftcap {
     static func main() async {
+        let argv = Array(CommandLine.arguments.dropFirst())
+        if argv.first == "retranscribe" {
+            let subArgs = Array(argv.dropFirst())
+            guard let cmd = RetranscribeCommand.parse(args: subArgs) else {
+                FileHandle.standardError.write("usage: swiftcap retranscribe --session-id N [--locale ja-JP] [--pass 2]\n".data(using: .utf8)!)
+                exit(2)
+            }
+            let retranscribeSpoolDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SWIFTCAP_SPOOL"]
+                ?? NSString(string: "~/Library/Application Support/audio-transcription/spool").expandingTildeInPath)
+            let dbPath = ProcessInfo.processInfo.environment["DB_PATH"] ?? "db/meeting_log.sqlite"
+            do {
+                try await cmd.run(dbPath: dbPath, spoolDir: retranscribeSpoolDir)
+                exit(0)
+            } catch {
+                FileHandle.standardError.write("retranscribe failed: \(error)\n".data(using: .utf8)!)
+                exit(1)
+            }
+        }
+
         let spoolDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SWIFTCAP_SPOOL"]
             ?? NSString(string: "~/Library/Application Support/audio-transcription/spool").expandingTildeInPath)
         let locale = Locale(identifier: ProcessInfo.processInfo.environment["SWIFTCAP_LOCALE"] ?? "ja-JP")
