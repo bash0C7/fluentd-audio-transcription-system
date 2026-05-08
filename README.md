@@ -11,18 +11,25 @@ No cloud APIs, no translation, no third-party LLM service. Everything that runs 
 ## Architecture
 
 ```
-swiftcap (Swift CLI)
-  └─ ScreenCaptureKit + AVAudioEngine
-     ├─ CAF/AAC rotating recorder
-     ├─ SpeechAnalyzer / SpeechTranscriber  (volatile + final)
-     └─ SNAudioStreamAnalyzer
-  ↓ spool/{quick,final,sound,state}.jsonl + *.caf
-fluentd
-  └─ in_tail × 4 → filter_audio_state / natural_language_mac /
-     foundation_model_mac → out_sqlite_meeting_log
-  ↓ SQLite WAL + ack.jsonl + HTTP webhook
+fluentd  (with in_swiftcap input plugin)
+  ├─ spawns swiftcap (Swift binary, owns macOS TCC consent — Screen / Mic / Speech)
+  │    swiftcap stdout ──→ JSON lines: {"stream":"quick"|"final"|"sound"|"state", …}
+  │                              │
+  │    in_swiftcap reads stdout, emits records under audio.<stream> tags
+  │
+  └─ filter chain (audio_state / natural_language_mac / foundation_model_mac)
+       └─ out_sqlite_meeting_log ──→ SQLite WAL + HTTP webhook to web
+                                  └─ ack to spool/swiftcap.sock (CAF deleted on ack)
+
+spool/
+  ├─ swiftcap.sock      (unix domain socket — boundary / mute_toggle / ack / retranscribe-emit)
+  └─ *.caf              (rotated audio segments, deleted by swiftcap on ack)
+
 web (sinatra + faye-websocket + puma)
-  ↓ WebSocket
+  ├─ POST /api/session/boundary → swiftcap.sock {"kind":"boundary"}
+  ├─ POST /api/session/mute     → swiftcap.sock {"kind":"mute_toggle"}
+  └─ retranscribe worker spawns `swiftcap retranscribe …` (one-shot client of swiftcap.sock)
+
 Chrome (PicoRuby:wasm + Three.js + 3d-force-graph)
   ┌──────────┬──────────┬─────────────┐
   │ Quick    │ Perfect  │ Network     │
@@ -41,28 +48,33 @@ Design and implementation references live under `docs/superpowers/specs/` and `d
 - Ruby 4.0.3 (managed by rbenv via `.ruby-version`)
 - Sibling repositories cloned alongside this one in the standard ghq layout: `../rb-natural-language-mac`, `../rb-foundation-model-mac`, `../swift_gem`
 
-The first runtime startup triggers macOS permission prompts for Screen Recording, Microphone, and Speech Recognition — all three must be approved.
+The first runtime startup triggers macOS permission prompts for Screen Recording, Microphone, and Speech Recognition under the swiftcap binary identity (`dev.bash0c7.swiftcap`) — all three must be approved.
 
 ## Setup
 
-Clone this repository, configure Bundler to install into `vendor/bundle` (`bundle config set --local path vendor/bundle`), then `bundle install`. Apply schema migrations with `bundle exec rake db:migrate`, which creates `db/meeting_log.sqlite`. Run `bundle exec ruby scripts/setup.rb` to generate any local config that depends on absolute paths.
+```bash
+bundle config set --local path vendor/bundle
+bundle install
+bundle exec rake db:migrate
+bundle exec ruby scripts/setup.rb       # generates LaunchAgents (fluentd, web) and builds swiftcap
+```
 
-The `swiftcap` Swift binary is built automatically by `rake start:swiftcap` the first time it runs (`swift build -c release` under `swift/swiftcap/`). No separate build step is needed.
+`scripts/setup.rb` builds the `swiftcap` Swift binary (`swift build -c release` under `swift/swiftcap/`) and renders LaunchAgent plists for fluentd and web. swiftcap itself is not a separate LaunchAgent — fluentd's `in_swiftcap` input plugin spawns it as a child process.
 
 ## Running
 
 All processes are launched as detached `screen` sessions through Rake. The standard development workflow:
 
-- `bundle exec rake start:all` — starts swiftcap, fluentd, and web concurrently
+- `bundle exec rake start:all` — starts caffeinate, fluentd (which spawns swiftcap), and web concurrently
 - `bundle exec rake status` — lists which `audio-*` screen sessions are alive
-- `bundle exec rake logs[fluentd]` — tails the named component's log; `[swiftcap]`, `[web]`, and `[caffeinate]` are also valid
+- `bundle exec rake logs[fluentd]` — tails the named component's log; `[web]` and `[caffeinate]` are also valid
 - `bundle exec rake stop:all` — gracefully stops every component (single SIGTERM, generous wait window per component, no SIGKILL escalation)
 
-Per-component variants exist as `start:<name>` / `stop:<name>` for `swiftcap`, `fluentd`, `web`, and `caffeinate`. The spool lives at `./spool/`, the database at `./db/meeting_log.sqlite`, and process logs at `./tmp/log/` — all of those paths are gitignored.
+Per-component variants exist as `start:<name>` / `stop:<name>` for `fluentd`, `web`, and `caffeinate`. The spool lives at `./spool/`, the database at `./db/meeting_log.sqlite`, and process logs at `./tmp/log/` — all of those paths are gitignored.
 
 After `start:all`, the live web UI is available at `http://localhost:9292/`, presenting Quick, Perfect, and Graph panes side by side.
 
-> Important: launching the web component outside of `rake start:web` requires exporting `SPOOL_DIR`, `SWIFTCAP_BIN`, and `DB_PATH` first. Without those variables, `POST /api/session/boundary` falls back to `~/Library/Application Support/...` and the retranscribe worker fails with `Errno::ENOENT` because `swiftcap` is not on `PATH`.
+> Important: launching the web component outside of `rake start:web` requires exporting `SPOOL_DIR`, `SWIFTCAP_BIN`, and `DB_PATH` first.
 
 ## Verifying
 
@@ -75,10 +87,11 @@ A live system is considered functional when the three panes at `http://localhost
 - **Channel-based speaker labeling.** The microphone channel is treated as `self`, the screen channel as `remote`. No diarization model.
 - **SQLite + WAL with `_sqlite_mcp_meta`.** The schema is intentionally compatible with `chiebukuro-mcp`, so the database can be queried as long-term memory by other tools in the same family.
 - **On-device only.** All ML inference (transcription, language detection, tokenization, NER, FM generation) runs against Apple frameworks on the local machine. Nothing leaves the device.
+- **stdio + unix socket I/O between swiftcap and fluentd.** swiftcap streams records to fluentd via a one-way stdout JSON-line stream; control / ack / retranscribe-emit go through `spool/swiftcap.sock`. There are no `*.jsonl` interchange files. swiftcap is the single TCC anchor binary; everything that doesn't need TCC consent lives in Ruby.
 
 ## Development
 
-Ruby unit tests run with `bundle exec rake test`. Swift unit tests run from `swift/swiftcap/` with `swift test`. The end-to-end synthetic acceptance harness is `bundle exec rake test:e5_synthetic`, which boots the full pipeline against a fixture audio file and verifies five layers (swiftcap output, fluentd ingest, SQLite persistence, ack delivery, process lifecycle).
+Ruby unit tests run with `bundle exec rake test`. Swift unit tests run from `swift/swiftcap/` with `swift test`. The end-to-end synthetic acceptance harness is `bundle exec rake test:e5_synthetic`, which boots the full pipeline against a fixture audio file and verifies five layers (swiftcap CAF output, fluentd ingest, SQLite persistence, ack-driven CAF deletion, process lifecycle).
 
 The repo follows a `screen -dmS` long-running pattern for Rake-launched components; logs land under `tmp/longrun/<name>.log` with a `DONE:` sentinel on completion.
 
