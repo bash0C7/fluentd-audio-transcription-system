@@ -24,7 +24,7 @@ end
 
 system('cd swift/swiftcap && swift build -c release', exception: true)
 
-%w[swiftcap fluentd web].each do |name|
+%w[fluentd web].each do |name|
   template = File.read(File.join(REPO_ROOT, "plists/dev.bash0c7.audio-transcription.#{name}.plist.erb"))
   rendered = ERB.new(template).result(binding)
   dest = File.join(LAUNCH_AGENTS, "dev.bash0c7.audio-transcription.#{name}.plist")
@@ -35,4 +35,4 @@ system('cd swift/swiftcap && swift build -c release', exception: true)
   puts "loaded: #{dest}"
 end
 
-puts 'all 3 LaunchAgents loaded. open http://localhost:9292/'
+puts 'all 2 LaunchAgents loaded. open http://localhost:9292/'
