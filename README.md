@@ -1,14 +1,20 @@
 # fluentd-audio-transcription-system
 
-macOS 26+ 上で動く、会議音声の常時キャプチャ・文字起こし・可視化システム。
+Always-on meeting audio capture, on-device transcription, and live visualization for macOS 26+.
 
-## アーキテクチャ概要
+## Overview
+
+The system continuously captures both microphone and system audio, transcribes them on-device via Apple SpeechAnalyzer, derives entity / edge structure from the transcripts via Apple NaturalLanguage and Apple Foundation Models (on-device LLM inference), persists everything to SQLite WAL, and streams the live state to a three-pane web UI rendered with PicoRuby:wasm + Three.js.
+
+No cloud APIs, no translation, no third-party LLM service. Everything that runs is either an Apple framework on the user's Mac, a Ruby gem in this repository's sibling layout, or fluentd.
+
+## Architecture
 
 ```
 swiftcap (Swift CLI)
   └─ ScreenCaptureKit + AVAudioEngine
      ├─ CAF/AAC rotating recorder
-     ├─ SpeechAnalyzer/SpeechTranscriber (volatile + final)
+     ├─ SpeechAnalyzer / SpeechTranscriber  (volatile + final)
      └─ SNAudioStreamAnalyzer
   ↓ spool/{quick,final,sound,state}.jsonl + *.caf
 fluentd
@@ -24,73 +30,62 @@ Chrome (PicoRuby:wasm + Three.js + 3d-force-graph)
   └──────────┴──────────┴─────────────┘
 ```
 
-詳細は `docs/superpowers/specs/2026-05-05-fluentd-audio-transcription-v2-design.md` 参照。実装計画は `docs/superpowers/plans/2026-05-05-fluentd-audio-transcription-v2.md` 参照。
+Design and implementation references live under `docs/superpowers/specs/` and `docs/superpowers/plans/`.
 
-## 前提
+## Requirements
 
-- macOS 26 (Tahoe) / Apple Silicon ── ランタイム実行に必須
-- macOS 15 (Sequoia) + Xcode CLT 26.x SDK ── ビルド検証だけなら可
-- Swift 6.3+ ([swiftly](https://www.swift.org/install/macos/) 経由推奨)
-- Ruby 4.0.1 (rbenv)
-- ローカル ghq layout で `../rb-natural-language-mac` `../rb-foundation-model-mac` `../swift_gem` が clone 済み
-- Ollama（`gemma4:e2b` 等）が `localhost:11434` で起動（`rb-foundation-model-mac` 仮実装が利用）
+- macOS 26 (Tahoe) on Apple Silicon — required at runtime
+- macOS 15 (Sequoia) with Xcode Command Line Tools 26.x SDK — sufficient for build verification only
+- Apple Intelligence enabled, with the on-device foundation model fully downloaded (Settings → Apple Intelligence & Siri). Required by `rb-foundation-model-mac` for on-device LLM inference.
+- Swift 6.3+, installed via [swiftly](https://www.swift.org/install/macos/)
+- Ruby 4.0.3 (managed by rbenv via `.ruby-version`)
+- Sibling repositories cloned alongside this one in the standard ghq layout: `../rb-natural-language-mac`, `../rb-foundation-model-mac`, `../swift_gem`
 
-## セットアップ
+The first runtime startup triggers macOS permission prompts for Screen Recording, Microphone, and Speech Recognition — all three must be approved.
 
-```bash
-git clone https://github.com/bash0C7/fluentd-audio-transcription-system
-cd fluentd-audio-transcription-system
-bundle config set --local path vendor/bundle
-bundle install
-bundle exec rake db:migrate
-bundle exec ruby scripts/setup.rb
-```
+## Setup
 
-初回起動時に macOS から「画面収録」「マイク」「音声認識」の許諾ダイアログが出る。すべて承認。
+Clone this repository, configure Bundler to install into `vendor/bundle` (`bundle config set --local path vendor/bundle`), then `bundle install`. Apply schema migrations with `bundle exec rake db:migrate`, which creates `db/meeting_log.sqlite`. Run `bundle exec ruby scripts/setup.rb` to generate any local config that depends on absolute paths.
 
-## 確認
+The `swiftcap` Swift binary is built automatically by `rake start:swiftcap` the first time it runs (`swift build -c release` under `swift/swiftcap/`). No separate build step is needed.
 
-```
-open http://localhost:9292/
-```
+## Running
 
-Quick / Perfect / Graph の 3 カラムが現れる。実会議や `say -v Kyoko こんにちは` で動作確認。
+All processes are launched as detached `screen` sessions through Rake. The standard development workflow:
 
-## マニュアル起動（LaunchAgent 不使用）
+- `bundle exec rake start:all` — starts swiftcap, fluentd, and web concurrently
+- `bundle exec rake status` — lists which `audio-*` screen sessions are alive
+- `bundle exec rake logs[fluentd]` — tails the named component's log; `[swiftcap]`, `[web]`, and `[caffeinate]` are also valid
+- `bundle exec rake stop:all` — gracefully stops every component (single SIGTERM, generous wait window per component, no SIGKILL escalation)
 
-開発時や常駐させたくないときは rake で `screen -dmS` セッションとして起動：
+Per-component variants exist as `start:<name>` / `stop:<name>` for `swiftcap`, `fluentd`, `web`, and `caffeinate`. The spool lives at `./spool/`, the database at `./db/meeting_log.sqlite`, and process logs at `./tmp/log/` — all of those paths are gitignored.
 
-```bash
-bundle exec rake start:all      # swiftcap + fluentd + web
-bundle exec rake status         # 動いてるセッションを確認
-bundle exec rake "logs[fluentd]"  # ログを tail （[swiftcap] / [web] も可）
-bundle exec rake stop:all       # 全停止
-```
+After `start:all`, the live web UI is available at `http://localhost:9292/`, presenting Quick, Perfect, and Graph panes side by side.
 
-個別の `start:swiftcap` / `start:fluentd` / `start:web`、停止は対応する `stop:<name>`。spool は `./spool/`、DB は `./db/meeting_log.sqlite`、ログは `./tmp/log/` に出る（すべて gitignored）。
+> Important: launching the web component outside of `rake start:web` requires exporting `SPOOL_DIR`, `SWIFTCAP_BIN`, and `DB_PATH` first. Without those variables, `POST /api/session/boundary` falls back to `~/Library/Application Support/...` and the retranscribe worker fails with `Errno::ENOENT` because `swiftcap` is not on `PATH`.
 
-> **rake 経由起動が前提**: `start:web` は web プロセスに `SPOOL_DIR` / `SWIFTCAP_BIN` / `DB_PATH` を環境変数で渡している。これらが無いと `POST /api/session/boundary` が default の `~/Library/Application Support/...` を見にいったり、`retranscribe` worker が `swiftcap` バイナリを `PATH` 上で見つけられず `Errno::ENOENT` で失敗する。直接 `bundle exec puma -C web/puma.rb web/config.ru` で立ち上げる場合は同じ env を手で export すること。
+## Verifying
 
-## 設計上の選択
+A live system is considered functional when the three panes at `http://localhost:9292/` render text and graph content during either a real meeting or a simple synthesized utterance such as `say -v Kyoko こんにちは`. Quick should populate within a second or two, Perfect within a few seconds, and the Graph pane should accumulate nodes (entities) and edges as content accrues.
 
-- 翻訳しない（日本語/英語そのまま）
-- 完璧経路は Apple SpeechAnalyzer + Foundation Models のみ（Strategy P, Whisper 不採用）
-- 話者識別はチャンネルベース（mic = self, screen = remote）
-- DB は SQLite WAL、`_sqlite_mcp_meta` で chiebukuro-mcp 互換
+## Design Choices
 
-## 開発
+- **No translation.** Japanese stays Japanese, English stays English. The transcription pipeline preserves the original locale.
+- **Single perfect-path strategy.** Apple SpeechAnalyzer drives both the volatile (Quick) and final (Perfect) streams; Apple Foundation Models drives entity-relation extraction. Whisper and other third-party transcription engines are not used.
+- **Channel-based speaker labeling.** The microphone channel is treated as `self`, the screen channel as `remote`. No diarization model.
+- **SQLite + WAL with `_sqlite_mcp_meta`.** The schema is intentionally compatible with `chiebukuro-mcp`, so the database can be queried as long-term memory by other tools in the same family.
+- **On-device only.** All ML inference (transcription, language detection, tokenization, NER, FM generation) runs against Apple frameworks on the local machine. Nothing leaves the device.
 
-```bash
-bundle exec rake test         # Ruby 側ユニットテスト
-cd swift/swiftcap && swift test  # Swift 側ユニットテスト
-bundle exec rake test:e5_synthetic  # mini-E5 5 層 acceptance (合成入力)
-```
+## Development
 
-## 状態とロードマップ
+Ruby unit tests run with `bundle exec rake test`. Swift unit tests run from `swift/swiftcap/` with `swift test`. The end-to-end synthetic acceptance harness is `bundle exec rake test:e5_synthetic`, which boots the full pipeline against a fixture audio file and verifies five layers (swiftcap output, fluentd ingest, SQLite persistence, ack delivery, process lifecycle).
 
-- 上記「確認」 の 2 つの動作確認パス (実会議 + `say -v Kyoko こんにちは`) は **verified** 状態。 詳細 evidence は `docs/superpowers/specs/2026-05-06-release-quality-graph-and-mic-quality.md` および `docs/superpowers/specs/2026-05-07-a1-stopwords-expansion.md` の "Verification 結果" セクション。
-- 次バージョン候補 / 残課題は `docs/superpowers/specs/2026-05-07-next-version-backlog.md` の冒頭「必達条件 (絶対必須)」 と「推奨される次の一手」 を参照。
+The repo follows a `screen -dmS` long-running pattern for Rake-launched components; logs land under `tmp/longrun/<name>.log` with a `DONE:` sentinel on completion.
 
-## ライセンス
+## Status
+
+The two verification paths described under "Verifying" are confirmed to work end-to-end. Ongoing investigation candidates and open questions are tracked in `docs/superpowers/specs/2026-05-07-next-version-backlog.md`.
+
+## License
 
 Apache 2.0
