@@ -39,7 +39,7 @@ struct RetranscribeCommand {
 extension RetranscribeCommand {
     /// Production entry: looks up audio_segments by session_id, expands blobs
     /// to tmp CAFs, calls runForFixture. Caller provides DB path.
-    func run(dbPath: String, spoolDir: URL) async throws {
+    func run(dbPath: String, socketPath: String) async throws {
         let blobs = try Self.fetchAudioSegmentBlobs(dbPath: dbPath, sessionId: sessionId)
         let tmpRoot = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("swiftcap-retr-\(sessionId)-\(UUID().uuidString)")
@@ -51,16 +51,13 @@ extension RetranscribeCommand {
             try blob.write(to: f)
             files.append(f)
         }
-        try await runForFixture(audioFiles: files, spoolDir: spoolDir)
+        try await runForFixture(audioFiles: files, socketPath: socketPath)
     }
 
     /// Test-friendly entry: takes already-on-disk audio files and runs them
     /// through one shared SpeechAnalyzer instance via start(inputSequence:),
     /// feeding each file's frames in order and finalizing at the end.
-    func runForFixture(audioFiles: [URL], spoolDir: URL) async throws {
-        let finalWriter = SpoolWriter(url: spoolDir.appendingPathComponent("final.jsonl"))
-        let stateWriter = SpoolWriter(url: spoolDir.appendingPathComponent("state.jsonl"))
-
+    func runForFixture(audioFiles: [URL], socketPath: String) async throws {
         // Mirror TranscriberWrapper: create transcriber + analyzer, ensure model
         // installed, obtain bestAvailableAudioFormat before starting the stream.
         let transcriber = SpeechTranscriber(
@@ -78,11 +75,18 @@ extension RetranscribeCommand {
             FileHandle.standardError.write(
                 "retranscribe: locale model not installed (\(error)), emitting retranscribe_done with no results\n"
                     .data(using: .utf8)!)
-            try stateWriter.append([
-                "ts": Date().timeIntervalSince1970,
-                "kind": "retranscribe_done",
-                "session_id": sessionId
-            ])
+            do {
+                let client = try ControlSocketClient(socketPath: socketPath)
+                defer { client.close() }
+                try? client.emit(stream: "state", record: [
+                    "ts": Date().timeIntervalSince1970,
+                    "kind": "retranscribe_done",
+                    "session_id": sessionId
+                ])
+            } catch {
+                FileHandle.standardError.write("retranscribe: cannot connect to \(socketPath): \(error)\n".data(using: .utf8)!)
+                throw error
+            }
             return
         }
 
@@ -172,8 +176,16 @@ extension RetranscribeCommand {
 
         let texts = try await collectTask.value
 
+        let client: ControlSocketClient
+        do {
+            client = try ControlSocketClient(socketPath: socketPath)
+        } catch {
+            FileHandle.standardError.write("retranscribe: cannot connect to \(socketPath): \(error)\n".data(using: .utf8)!)
+            throw error
+        }
+        defer { client.close() }
         for text in texts {
-            try finalWriter.append([
+            try? client.emit(stream: "final", record: [
                 "ts": Date().timeIntervalSince1970,
                 "kind": "final",
                 "ch": "mic",
@@ -183,7 +195,7 @@ extension RetranscribeCommand {
                 "session_id": sessionId
             ])
         }
-        try stateWriter.append([
+        try? client.emit(stream: "state", record: [
             "ts": Date().timeIntervalSince1970,
             "kind": "retranscribe_done",
             "session_id": sessionId

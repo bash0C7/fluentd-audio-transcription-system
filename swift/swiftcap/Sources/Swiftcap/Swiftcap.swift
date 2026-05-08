@@ -14,9 +14,11 @@ struct Swiftcap {
             }
             let retranscribeSpoolDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SWIFTCAP_SPOOL"]
                 ?? NSString(string: "~/Library/Application Support/audio-transcription/spool").expandingTildeInPath)
+            let socketPath = ProcessInfo.processInfo.environment["SWIFTCAP_SOCKET_PATH"]
+                ?? retranscribeSpoolDir.appendingPathComponent("swiftcap.sock").path
             let dbPath = ProcessInfo.processInfo.environment["DB_PATH"] ?? "db/meeting_log.sqlite"
             do {
-                try await cmd.run(dbPath: dbPath, spoolDir: retranscribeSpoolDir)
+                try await cmd.run(dbPath: dbPath, socketPath: socketPath)
                 exit(0)
             } catch {
                 FileHandle.standardError.write("retranscribe failed: \(error)\n".data(using: .utf8)!)
