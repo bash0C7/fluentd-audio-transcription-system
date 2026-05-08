@@ -7,8 +7,7 @@ import Speech
 final class TranscriberWrapper: @unchecked Sendable {
     private let channel: String
     private let locale: Locale
-    private let quickWriter: SpoolWriter
-    private let finalWriter: SpoolWriter
+    private let emitter: RecordEmitter
     let sessionStartedAtProvider: @Sendable () async -> TimeInterval
     private let analyzer: SpeechAnalyzer
     private let transcriber: SpeechTranscriber
@@ -23,12 +22,11 @@ final class TranscriberWrapper: @unchecked Sendable {
     // on it exactly once.
     private let continuation: AsyncStream<AnalyzerInput>.Continuation
 
-    init(channel: String, locale: Locale, quickWriter: SpoolWriter, finalWriter: SpoolWriter,
+    init(channel: String, locale: Locale, emitter: RecordEmitter,
          sessionStartedAtProvider: @escaping @Sendable () async -> TimeInterval = { 0 }) async throws {
         self.channel = channel
         self.locale = locale
-        self.quickWriter = quickWriter
-        self.finalWriter = finalWriter
+        self.emitter = emitter
         self.sessionStartedAtProvider = sessionStartedAtProvider
         self.transcriber = SpeechTranscriber(
             locale: locale,
@@ -67,7 +65,7 @@ final class TranscriberWrapper: @unchecked Sendable {
                     let endedAt = result.range.end.seconds
                     let sat = await self.sessionStartedAtProvider()
                     if result.isFinal {
-                        try? self.finalWriter.append([
+                        self.emitter.emit(stream: "final", record: [
                             "ts": now,
                             "ch": self.channel,
                             "kind": "final",
@@ -79,7 +77,7 @@ final class TranscriberWrapper: @unchecked Sendable {
                             "session_started_at": sat
                         ])
                     } else {
-                        try? self.quickWriter.append([
+                        self.emitter.emit(stream: "quick", record: [
                             "ts": now,
                             "ch": self.channel,
                             "kind": "volatile",

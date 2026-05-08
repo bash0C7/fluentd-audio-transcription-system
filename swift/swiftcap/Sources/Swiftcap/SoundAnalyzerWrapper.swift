@@ -5,13 +5,13 @@ import SoundAnalysis
 
 final class SoundAnalyzerWrapper: NSObject, SNResultsObserving, @unchecked Sendable {
     private let channel: String
-    private let writer: SpoolWriter
+    private let emitter: RecordEmitter
     private let analyzer: SNAudioStreamAnalyzer
     private let format: AVAudioFormat
 
-    init(channel: String, writer: SpoolWriter, format: AVAudioFormat) throws {
+    init(channel: String, emitter: RecordEmitter, format: AVAudioFormat) throws {
         self.channel = channel
-        self.writer = writer
+        self.emitter = emitter
         self.analyzer = SNAudioStreamAnalyzer(format: format)
         self.format = format
         super.init()
@@ -25,7 +25,7 @@ final class SoundAnalyzerWrapper: NSObject, SNResultsObserving, @unchecked Senda
 
     func request(_ request: SNRequest, didProduce result: SNResult) {
         guard let r = result as? SNClassificationResult, let top = r.classifications.first else { return }
-        try? writer.append([
+        emitter.emit(stream: "sound", record: [
             "ts": Date().timeIntervalSince1970,
             "ch": channel,
             "started_at": r.timeRange.start.seconds,

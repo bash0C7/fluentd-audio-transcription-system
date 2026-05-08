@@ -9,10 +9,7 @@ actor CaptureCoordinator {
     private var recorders: [String: RotatingRecorder] = [:]
     private var transcribers: [String: TranscriberWrapper] = [:]
     private var sounds: [String: SoundAnalyzerWrapper] = [:]
-    private var stateWriter: SpoolWriter
-    private let quickWriter: SpoolWriter
-    private let finalWriter: SpoolWriter
-    private let soundWriter: SpoolWriter
+    private let emitter: RecordEmitter
     private var rotateTask: Task<Void, Never>?
     private let micEngine = AVAudioEngine()
     private var screenStream: SCStream?
@@ -36,19 +33,16 @@ actor CaptureCoordinator {
     }
     #endif
 
-    init(spoolDir: URL, sessions: SessionTracker = SessionTracker()) {
+    init(spoolDir: URL, emitter: RecordEmitter = StdoutEmitter(), sessions: SessionTracker = SessionTracker()) {
         self.spoolDir = spoolDir
+        self.emitter = emitter
         self.sessions = sessions
         try? FileManager.default.createDirectory(at: spoolDir, withIntermediateDirectories: true)
-        self.stateWriter = SpoolWriter(url: spoolDir.appendingPathComponent("state.jsonl"))
-        self.quickWriter = SpoolWriter(url: spoolDir.appendingPathComponent("quick.jsonl"))
-        self.finalWriter = SpoolWriter(url: spoolDir.appendingPathComponent("final.jsonl"))
-        self.soundWriter = SpoolWriter(url: spoolDir.appendingPathComponent("sound.jsonl"))
     }
 
     func start(locale: Locale) async throws {
         let sat = await sessions.currentSessionStartedAt
-        try? stateWriter.append([
+        emitter.emit(stream: "state", record: [
             "ts": Date().timeIntervalSince1970,
             "kind": "session_started",
             "session_started_at": sat
@@ -58,8 +52,7 @@ actor CaptureCoordinator {
             recorders[ch] = RotatingRecorder(channel: ch, spoolDir: spoolDir)
             transcribers[ch] = try await TranscriberWrapper(
                 channel: ch, locale: locale,
-                quickWriter: quickWriter,
-                finalWriter: finalWriter,
+                emitter: emitter,
                 sessionStartedAtProvider: { [weak self] in
                     await self?.sessions.currentSessionStartedAt ?? 0
                 })
@@ -77,7 +70,7 @@ actor CaptureCoordinator {
                                          sampleRate: 16000,
                                          channels: 1,
                                          interleaved: false)!
-        sounds["screen"] = try SoundAnalyzerWrapper(channel: "screen", writer: soundWriter, format: screenFormat)
+        sounds["screen"] = try SoundAnalyzerWrapper(channel: "screen", emitter: emitter, format: screenFormat)
 
         try await startMic()
         try await startScreen()
@@ -127,13 +120,13 @@ actor CaptureCoordinator {
             await rotate(channel: ch, recorder: recorder, reason: "boundary")
         }
         let prevSat = await sessions.rollover(now: now)
-        try? stateWriter.append([
+        emitter.emit(stream: "state", record: [
             "ts": now,
             "kind": "session_finalized",
             "session_started_at": prevSat,
             "ended_at": now
         ])
-        try? stateWriter.append([
+        emitter.emit(stream: "state", record: [
             "ts": now,
             "kind": "session_started",
             "session_started_at": now
@@ -158,7 +151,7 @@ actor CaptureCoordinator {
                 installMicTap()
             }
         }
-        try? stateWriter.append([
+        emitter.emit(stream: "state", record: [
             "ts": Date().timeIntervalSince1970,
             "kind": "mute_changed",
             "session_started_at": sat,
@@ -182,7 +175,7 @@ actor CaptureCoordinator {
         for p in paths {
             let url = URL(fileURLWithPath: p)
             try? FileManager.default.removeItem(at: url)
-            try? stateWriter.append([
+            emitter.emit(stream: "state", record: [
                 "ts": Date().timeIntervalSince1970,
                 "kind": "deleted",
                 "path": p
@@ -202,7 +195,7 @@ actor CaptureCoordinator {
             }
         FileHandle.standardError.write("rotate[\(channel)]: finalize done bytes=\(finalized.bytes)\n".data(using: .utf8)!)
         let sat = await sessions.currentSessionStartedAt
-        try? stateWriter.append([
+        emitter.emit(stream: "state", record: [
             "ts": Date().timeIntervalSince1970,
             "kind": "rotated",
             "channel": channel,
@@ -227,7 +220,7 @@ actor CaptureCoordinator {
     private func startMic() async throws {
         let input = micEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
-        sounds["mic"] = try SoundAnalyzerWrapper(channel: "mic", writer: soundWriter, format: inputFormat)
+        sounds["mic"] = try SoundAnalyzerWrapper(channel: "mic", emitter: emitter, format: inputFormat)
         let firstBufferLogged = ConvertOnce()
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
             guard let self else { return }
@@ -309,7 +302,7 @@ actor CaptureCoordinator {
                 .data(using: .utf8)!
         )
 
-        try? stateWriter.append([
+        emitter.emit(stream: "state", record: [
             "ts": Date().timeIntervalSince1970,
             "kind": "channel_failed",
             "channel": "screen",

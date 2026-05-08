@@ -29,7 +29,7 @@ struct Swiftcap {
         let locale = Locale(identifier: ProcessInfo.processInfo.environment["SWIFTCAP_LOCALE"] ?? "ja-JP")
 
         FileHandle.standardError.write("swiftcap starting spool=\(spoolDir.path) locale=\(locale.identifier)\n".data(using: .utf8)!)
-        let coordinator = CaptureCoordinator(spoolDir: spoolDir)
+        let coordinator = CaptureCoordinator(spoolDir: spoolDir, emitter: StdoutEmitter())
         do {
             try await coordinator.start(locale: locale)
         } catch {
