@@ -16,14 +16,24 @@ final class StdoutEmitter: RecordEmitter, @unchecked Sendable {
     func emit(stream: String, record: [String: Any]) {
         var withStream = record
         withStream["stream"] = stream
-        guard let data = try? JSONSerialization.data(withJSONObject: withStream, options: [.sortedKeys]) else {
+        let data: Data
+        do {
+            data = try JSONSerialization.data(withJSONObject: withStream, options: [.sortedKeys])
+        } catch {
+            FileHandle.standardError.write(
+                "StdoutEmitter: JSONSerialization failed stream=\(stream) error=\(error)\n".data(using: .utf8) ?? Data())
             return
         }
         var line = data
         line.append(0x0A)
         lock.lock()
         defer { lock.unlock() }
-        try? handle.write(contentsOf: line)
+        do {
+            try handle.write(contentsOf: line)
+        } catch {
+            FileHandle.standardError.write(
+                "StdoutEmitter: write failed stream=\(stream) error=\(error)\n".data(using: .utf8) ?? Data())
+        }
     }
 }
 
