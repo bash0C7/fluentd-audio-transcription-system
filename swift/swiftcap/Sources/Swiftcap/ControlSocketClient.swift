@@ -82,6 +82,7 @@ final class ControlSocketClient {
     }
 
     func close() {
+        Darwin.shutdown(fd, SHUT_WR)  // send FIN before close so NWListener delivers the connection
         Darwin.close(fd)
     }
 

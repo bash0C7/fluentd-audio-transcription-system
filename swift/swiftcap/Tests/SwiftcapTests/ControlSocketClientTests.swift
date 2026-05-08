@@ -8,8 +8,7 @@ struct ControlSocketClientTests {
     @available(macOS 26.0, *)
     @Test
     func emitWritesEmitJsonLineToServer() async throws {
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("ctrl-client-\(UUID().uuidString).sock")
+        let tmp = URL(fileURLWithPath: "/tmp/cct-\(UUID().uuidString.prefix(8)).sock")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let captured = CapturingEmitter()

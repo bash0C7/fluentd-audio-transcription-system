@@ -19,8 +19,7 @@ struct ControlSocketTests {
     @available(macOS 26.0, *)
     @Test
     func dispatchesBoundaryAndMuteAndAckLines() async throws {
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("ctrl-sock-\(UUID().uuidString).sock")
+        let tmp = URL(fileURLWithPath: "/tmp/cs-\(UUID().uuidString.prefix(8)).sock")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let recorder = Recorder()
@@ -76,8 +75,7 @@ struct ControlSocketTests {
     @available(macOS 26.0, *)
     @Test
     func unlinksStaleSocketFileBeforeBind() throws {
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("ctrl-stale-\(UUID().uuidString).sock")
+        let tmp = URL(fileURLWithPath: "/tmp/cs-stale-\(UUID().uuidString.prefix(8)).sock")
         // Pre-create a stale file
         try Data([0x00]).write(to: tmp)
         #expect(FileManager.default.fileExists(atPath: tmp.path))
