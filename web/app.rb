@@ -37,23 +37,27 @@ class TranscriptionWeb < Sinatra::Base
         '/Users/bash/Library/Application Support/audio-transcription/spool')
     end
 
-    def append_control(kind)
-      path = File.join(spool_dir, 'control.jsonl')
-      File.open(path, 'a') do |f|
-        f.write({ ts: Time.now.to_f, kind: kind }.to_json + "\n")
+    def swiftcap_socket_path
+      ENV.fetch('SWIFTCAP_SOCKET_PATH', File.join(spool_dir, 'swiftcap.sock'))
+    end
+
+    def send_control(kind)
+      require 'socket'
+      UNIXSocket.open(swiftcap_socket_path) do |sock|
+        sock.puts JSON.generate({ 'kind' => kind })
       end
     end
   end
 
   post '/api/session/boundary' do
-    append_control('boundary')
+    send_control('boundary')
     status 202
     content_type :json
     { status: 'queued' }.to_json
   end
 
   post '/api/session/mute' do
-    append_control('mute_toggle')
+    send_control('mute_toggle')
     status 202
     content_type :json
     { status: 'queued' }.to_json
