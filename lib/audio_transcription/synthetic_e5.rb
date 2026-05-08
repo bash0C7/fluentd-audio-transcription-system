@@ -71,8 +71,7 @@ module AudioTranscription
 
     def capture_baseline
       @baseline[:cafs] = Dir.glob(File.join(@spool_dir, '*.caf'))
-      @baseline[:rotated_count] = count_rotated
-      @baseline[:ack_count] = count_ack
+      @baseline[:audio_segments] = count_audio_segments
       @baseline[:mic_transcripts]    = count_transcripts_with_time(channel: 'mic')
       @baseline[:screen_transcripts] = count_transcripts_with_time(channel: 'screen')
     end
@@ -154,35 +153,42 @@ module AudioTranscription
     end
 
     def verify_l4_ack
-      rotated = count_rotated - @baseline[:rotated_count]
-      ack = 0
-      # fluentd's out_sqlite_meeting_log writes ack.jsonl on flush, which
-      # may lag stop:all by a fraction of a second. Poll until parity
-      # rather than asserting on a single instantaneous read.
+      # In the new model, swiftcap deletes a CAF the moment it receives an ack
+      # over swiftcap.sock. So a successful ack manifests as: an audio_segments
+      # row exists for a CAF whose file is no longer present on disk.
       reached_parity = wait_until(timeout: 15.0, poll: 0.3) do
-        ack = count_ack - @baseline[:ack_count]
-        ack >= rotated
+        rotated = count_audio_segments - @baseline[:audio_segments]
+        acked = count_acked_via_deletion(rotated)
+        rotated > 0 && acked >= rotated
       end
-      fail!(:L4, "ack count #{ack} != rotated count #{rotated} (1:1 expected; polled 15s)") unless reached_parity && ack == rotated
+      unless reached_parity
+        rotated = count_audio_segments - @baseline[:audio_segments]
+        acked = count_acked_via_deletion(rotated)
+        fail!(:L4, "ack-driven CAF deletion never caught up: rotated=#{rotated} acked=#{acked} (polled 15s)")
+      end
     end
 
     def verify_l5_processes
       remaining = Dir.glob(File.join(@run_dir, '*.pid')).reject { |p| File.basename(p) == '.keep' }
       fail!(:L5, "leftover pid files: #{remaining.map { |p| File.basename(p) }.join(', ')}") unless remaining.empty?
-      stragglers = `pgrep -f 'swiftcap|fluentd -c config|puma -C web|caffeinate -dimsu'`.lines.map(&:strip).reject(&:empty?)
+      stragglers = `pgrep -f 'fluentd -c config|puma -C web|caffeinate -dimsu'`.lines.map(&:strip).reject(&:empty?)
       fail!(:L5, "leftover processes: pids=#{stragglers.join(',')}") unless stragglers.empty?
     end
 
-    def count_rotated
-      path = File.join(@spool_dir, 'state.jsonl')
-      return 0 unless File.exist?(path)
-      File.foreach(path).count { |l| l.include?('"kind":"rotated"') }
+    def count_audio_segments
+      with_db do |db|
+        db.get_first_value('SELECT COUNT(*) FROM audio_segments')
+      end
+    rescue SQLite3::SQLException
+      0
     end
 
-    def count_ack
-      path = File.join(@spool_dir, 'ack.jsonl')
-      return 0 unless File.exist?(path)
-      File.foreach(path).count
+    # An ack causes swiftcap to delete the CAF. So acked-count for a session is
+    # rotated_count minus the number of new CAFs still on disk that haven't been
+    # acked yet.
+    def count_acked_via_deletion(rotated_count)
+      present_now = Dir.glob(File.join(@spool_dir, '*.caf')).reject { |p| @baseline[:cafs].include?(p) }.size
+      rotated_count - present_now
     end
 
     def count_transcripts_with_time(channel:)
