@@ -90,7 +90,7 @@ module Fluent
 
       def read_stderr_loop
         @stderr.each_line do |line|
-          log.warn "swiftcap[stderr]: #{line.chomp}"
+          log.info "swiftcap[stderr]: #{line.chomp}"
         end
       rescue IOError
         # ignore
