@@ -33,7 +33,7 @@ actor CaptureCoordinator {
     }
     #endif
 
-    init(spoolDir: URL, emitter: RecordEmitter = StdoutEmitter(), sessions: SessionTracker = SessionTracker()) {
+    init(spoolDir: URL, emitter: RecordEmitter, sessions: SessionTracker = SessionTracker()) {
         self.spoolDir = spoolDir
         self.emitter = emitter
         self.sessions = sessions
