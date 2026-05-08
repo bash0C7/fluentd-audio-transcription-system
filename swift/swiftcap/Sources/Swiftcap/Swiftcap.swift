@@ -1,4 +1,4 @@
-// swift/swiftcap/Sources/Swiftcap/main.swift
+// swift/swiftcap/Sources/Swiftcap/Swiftcap.swift
 import Foundation
 
 @available(macOS 26.0, *)
@@ -26,16 +26,41 @@ struct Swiftcap {
 
         let spoolDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SWIFTCAP_SPOOL"]
             ?? NSString(string: "~/Library/Application Support/audio-transcription/spool").expandingTildeInPath)
+        let socketPath = ProcessInfo.processInfo.environment["SWIFTCAP_SOCKET_PATH"]
+            ?? spoolDir.appendingPathComponent("swiftcap.sock").path
         let locale = Locale(identifier: ProcessInfo.processInfo.environment["SWIFTCAP_LOCALE"] ?? "ja-JP")
 
-        FileHandle.standardError.write("swiftcap starting spool=\(spoolDir.path) locale=\(locale.identifier)\n".data(using: .utf8)!)
-        let coordinator = CaptureCoordinator(spoolDir: spoolDir, emitter: StdoutEmitter())
+        FileHandle.standardError.write(
+            "swiftcap starting spool=\(spoolDir.path) socket=\(socketPath) locale=\(locale.identifier)\n".data(using: .utf8)!)
+
+        let emitter = StdoutEmitter()
+        let coordinator = CaptureCoordinator(spoolDir: spoolDir, emitter: emitter)
+
         do {
             try await coordinator.start(locale: locale)
         } catch {
             FileHandle.standardError.write("startup failed: \(error)\n".data(using: .utf8)!)
             exit(1)
         }
+
+        let controlSocket: ControlSocket
+        do {
+            controlSocket = try ControlSocket(socketPath: socketPath)
+            try controlSocket.start(
+                onBoundary: { Task { await coordinator.handleBoundary() } },
+                onMuteToggle: { Task { await coordinator.handleMuteToggle() } },
+                onAck: { paths in Task { await coordinator.acknowledgeAndDelete(paths: paths) } },
+                emitter: emitter
+            )
+        } catch {
+            FileHandle.standardError.write("controlsocket failed: \(error)\n".data(using: .utf8)!)
+            exit(1)
+        }
+
+        emitter.emit(stream: "state", record: [
+            "ts": Date().timeIntervalSince1970,
+            "kind": "swiftcap_ready"
+        ])
         FileHandle.standardError.write("swiftcap ready\n".data(using: .utf8)!)
 
         let hupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .global())
@@ -47,6 +72,7 @@ struct Swiftcap {
             Task {
                 FileHandle.standardError.write("shutdown: stopping engines + rotating\n".data(using: .utf8)!)
                 await coordinator.shutdownRotate(reason: "shutdown")
+                controlSocket.stop()
                 FileHandle.standardError.write("shutdown: done, exiting\n".data(using: .utf8)!)
                 exit(0)
             }
@@ -61,37 +87,6 @@ struct Swiftcap {
         intSource.setEventHandler(handler: shutdown)
         signal(SIGINT, SIG_IGN)
         intSource.resume()
-
-        let ackReader = AckReader(url: spoolDir.appendingPathComponent("ack.jsonl"))
-        Task {
-            while true {
-                if let consumed = try? ackReader.readNew(), !consumed.isEmpty {
-                    await coordinator.acknowledgeAndDelete(paths: consumed)
-                }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-            }
-        }
-
-        let controlReader = ControlReader(
-            controlURL: spoolDir.appendingPathComponent("control.jsonl"),
-            posURL: spoolDir.appendingPathComponent(".pos.control"))
-        Task {
-            while true {
-                if let events = try? controlReader.readNew(), !events.isEmpty {
-                    for ev in events {
-                        switch ev["kind"] as? String {
-                        case "boundary":
-                            await coordinator.handleBoundary()
-                        case "mute_toggle":
-                            await coordinator.handleMuteToggle()
-                        default:
-                            FileHandle.standardError.write("control: unknown kind \(ev)\n".data(using: .utf8)!)
-                        }
-                    }
-                }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-        }
 
         try? await Task.sleep(nanoseconds: UInt64.max)
     }
