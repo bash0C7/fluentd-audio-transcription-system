@@ -58,12 +58,21 @@ final class ControlSocket: @unchecked Sendable {
         emitter: RecordEmitter
     ) {
         let buffer = Buffer()
+        conn.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.receive(conn, buffer: buffer,
+                              onBoundary: onBoundary,
+                              onMuteToggle: onMuteToggle,
+                              onAck: onAck,
+                              emitter: emitter)
+            case .failed, .cancelled:
+                break
+            default:
+                break
+            }
+        }
         conn.start(queue: queue)
-        receive(conn, buffer: buffer,
-                onBoundary: onBoundary,
-                onMuteToggle: onMuteToggle,
-                onAck: onAck,
-                emitter: emitter)
     }
 
     private func receive(
