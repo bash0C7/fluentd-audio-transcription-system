@@ -27,7 +27,7 @@ RUN_DIR = File.join(REPO_ROOT, 'tmp', 'run')
 
 # wait_sec table per CLAUDE.md graceful-shutdown discipline
 # (CAF rotation, fluentd buffer flush, puma drain, etc).
-WAIT_SEC = { 'swiftcap' => 30, 'fluentd' => 60, 'web' => 10, 'caffeinate' => 5 }.freeze
+WAIT_SEC = { 'fluentd' => 60, 'web' => 10, 'caffeinate' => 5 }.freeze
 
 def process_alive?(pid)
   return false if pid.nil? || pid <= 0
@@ -68,33 +68,26 @@ def stop_via_pidfile(name, wait_sec, has_screen: true)
 end
 
 namespace :start do
-  desc 'Start swiftcap in screen session "audio-swiftcap" with PID file'
-  task :swiftcap do
+  desc 'Start fluentd as daemon (writes pidfile via -d, no screen wrapping)'
+  task fluentd: 'db:migrate' do
     unless File.executable?(SWIFTCAP_BIN)
       sh 'cd swift/swiftcap && swift build -c release'
     end
-    FileUtils.mkdir_p([SPOOL_DIR, LOG_DIR, RUN_DIR])
-    locale = ENV['SWIFTCAP_LOCALE'] || 'ja-JP'
-    pidfile = File.join(RUN_DIR, 'swiftcap.pid')
-    sh "screen -dmS audio-swiftcap bash -c 'echo $$ > #{pidfile}; SWIFTCAP_SPOOL=#{SPOOL_DIR} SWIFTCAP_LOCALE=#{locale} exec #{SWIFTCAP_BIN} > #{LOG_DIR}/swiftcap.log 2>&1; echo DONE: exit=$? >> #{LOG_DIR}/swiftcap.log'"
-    20.times { break if File.exist?(pidfile); sleep 0.2 }
-    puts "started: audio-swiftcap (pid=#{File.read(pidfile).strip rescue '?'}, log: #{LOG_DIR}/swiftcap.log)"
-  end
-
-  desc 'Start fluentd as daemon (writes pidfile via -d, no screen wrapping)'
-  task fluentd: 'db:migrate' do
     FileUtils.mkdir_p([SPOOL_DIR, LOG_DIR, RUN_DIR, File.dirname(DB_PATH)])
-    %w[quick.jsonl final.jsonl sound.jsonl state.jsonl].each do |f|
-      FileUtils.touch(File.join(SPOOL_DIR, f))
+    # Strip any leftover legacy spool files (in_tail era) so they cannot
+    # confuse the new in_swiftcap pipeline.
+    %w[quick.jsonl final.jsonl sound.jsonl state.jsonl control.jsonl ack.jsonl].each do |f|
+      File.delete(File.join(SPOOL_DIR, f)) rescue nil
     end
+    Dir.glob(File.join(SPOOL_DIR, '.pos.*')).each { |f| File.delete(f) rescue nil }
     pidfile = File.join(RUN_DIR, 'fluentd.pid')
     File.delete(pidfile) if File.exist?(pidfile) && !process_alive?(File.read(pidfile).to_i)
     abort "fluentd appears to be running (pid=#{File.read(pidfile)})" if File.exist?(pidfile)
     sh({
       'SPOOL_DIR' => SPOOL_DIR,
-      'DB_PATH' => DB_PATH
+      'DB_PATH' => DB_PATH,
+      'SWIFTCAP_BIN' => SWIFTCAP_BIN
     }, "bundle exec fluentd -c config/fluent.conf -p lib/fluent/plugin -d #{pidfile} -o #{LOG_DIR}/fluentd.log")
-    # fluentd -d backgrounds itself; rake's sh returns when daemonization completes.
     20.times { break if File.exist?(pidfile); sleep 0.2 }
     abort "fluentd failed to write pidfile" unless File.exist?(pidfile)
     puts "started: fluentd (pid=#{File.read(pidfile)}, log: #{LOG_DIR}/fluentd.log)"
@@ -116,16 +109,11 @@ namespace :start do
     puts "started: audio-caffeinate (pid=#{File.read(pidfile).strip rescue '?'})"
   end
 
-  desc 'Start all 4 services (swiftcap, fluentd, web, caffeinate)'
-  task all: %w[start:caffeinate start:swiftcap start:fluentd start:web]
+  desc 'Start 3 services (caffeinate, fluentd → spawns swiftcap, web)'
+  task all: %w[start:caffeinate start:fluentd start:web]
 end
 
 namespace :stop do
-  desc 'Stop audio-swiftcap (graceful via pidfile + screen quit)'
-  task :swiftcap do
-    stop_via_pidfile('swiftcap', WAIT_SEC['swiftcap'], has_screen: true)
-  end
-
   desc 'Stop fluentd (graceful via pidfile, no screen)'
   task :fluentd do
     stop_via_pidfile('fluentd', WAIT_SEC['fluentd'], has_screen: false)
@@ -141,8 +129,8 @@ namespace :stop do
     stop_via_pidfile('caffeinate', WAIT_SEC['caffeinate'], has_screen: true)
   end
 
-  desc 'Stop all 4 services in graceful order (swiftcap first stops new data; caffeinate last)'
-  task all: %w[stop:swiftcap stop:fluentd stop:web stop:caffeinate]
+  desc 'Stop 3 services in graceful order (fluentd first stops swiftcap; caffeinate last)'
+  task all: %w[stop:fluentd stop:web stop:caffeinate]
 end
 
 desc 'Show running audio-* screen sessions'
