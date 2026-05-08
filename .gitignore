@@ -8,6 +8,7 @@
 /tmp/run/*
 !/tmp/run/.keep
 /.superpowers/
+/.claude/settings.local.json
 /db/*.sqlite*
 swift/swiftcap/.build/
 swift/swiftcap/Package.resolved
