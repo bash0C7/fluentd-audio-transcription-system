@@ -50,13 +50,6 @@ final class ControlSocketClient {
 
     func sendBoundary() throws { try writeKind("boundary") }
     func sendMuteToggle() throws { try writeKind("mute_toggle") }
-    func sendAck(paths: [String]) throws {
-        let payload: [String: Any] = ["kind": "ack", "paths": paths]
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-        var line = data
-        line.append(0x0A)
-        try writeAll(line)
-    }
 
     private func writeKind(_ kind: String) throws {
         let data = try JSONSerialization.data(withJSONObject: ["kind": kind], options: [.sortedKeys])

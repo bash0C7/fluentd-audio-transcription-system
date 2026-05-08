@@ -14,7 +14,7 @@ struct ControlSocketClientTests {
         let captured = CapturingEmitter()
         let socket = try ControlSocket(socketPath: tmp.path)
         try socket.start(
-            onBoundary: {}, onMuteToggle: {}, onAck: { _ in },
+            onBoundary: {}, onMuteToggle: {},
             emitter: captured
         )
         defer { socket.stop() }

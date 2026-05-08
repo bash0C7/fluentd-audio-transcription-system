@@ -4,7 +4,6 @@ require 'sqlite3'
 require 'json'
 require 'net/http'
 require 'uri'
-require 'socket'
 
 module Fluent
   module Plugin
@@ -12,7 +11,6 @@ module Fluent
       Fluent::Plugin.register_output('sqlite_meeting_log', self)
 
       config_param :db_path, :string
-      config_param :swiftcap_socket_path, :string, default: nil
       config_param :webhook_url, :string, default: nil
 
       def configure(conf)
@@ -127,8 +125,14 @@ module Fluent
           record['duration_sec'].to_f, record['codec'], record['sample_rate'].to_i,
           record['bytes'].to_i, SQLite3::Blob.new(record['blob']), session_id
         ])
-        if @swiftcap_socket_path && record['path']
-          send_ack([record['path']])
+        if record['path']
+          begin
+            File.delete(record['path'])
+          rescue Errno::ENOENT
+            # already gone — fine, idempotent
+          rescue StandardError => e
+            log.warn "could not delete CAF #{record['path']}: #{e.class}: #{e.message}"
+          end
         end
         notify('audio_segment', record.reject { |k, _| k == 'blob' })
       end
@@ -175,14 +179,6 @@ module Fluent
               SET weight = weight + 1.0, last_observed_at = ?
           SQL
         end
-      end
-
-      def send_ack(paths)
-        UNIXSocket.open(@swiftcap_socket_path) do |sock|
-          sock.puts JSON.generate({ 'kind' => 'ack', 'paths' => paths })
-        end
-      rescue StandardError => e
-        log.warn "ack to swiftcap socket failed: #{e.class}: #{e.message}"
       end
 
       def notify(kind, payload)

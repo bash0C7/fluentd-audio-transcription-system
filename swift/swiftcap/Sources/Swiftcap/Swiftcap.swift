@@ -51,7 +51,6 @@ struct Swiftcap {
             try controlSocket.start(
                 onBoundary: { Task { await coordinator.handleBoundary() } },
                 onMuteToggle: { Task { await coordinator.handleMuteToggle() } },
-                onAck: { paths in Task { await coordinator.acknowledgeAndDelete(paths: paths) } },
                 emitter: emitter
             )
         } catch {

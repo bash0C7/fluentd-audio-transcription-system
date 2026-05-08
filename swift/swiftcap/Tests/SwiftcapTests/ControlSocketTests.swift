@@ -18,7 +18,7 @@ struct ControlSocketTests {
 
     @available(macOS 26.0, *)
     @Test
-    func dispatchesBoundaryAndMuteAndAckLines() async throws {
+    func dispatchesBoundaryMuteAndEmit() async throws {
         let tmp = URL(fileURLWithPath: "/tmp/cs-\(UUID().uuidString.prefix(8)).sock")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -28,7 +28,6 @@ struct ControlSocketTests {
         try socket.start(
             onBoundary: { recorder.record(["kind": "boundary"]) },
             onMuteToggle: { recorder.record(["kind": "mute_toggle"]) },
-            onAck: { paths in recorder.record(["kind": "ack", "paths": paths]) },
             emitter: emitter
         )
         defer { socket.stop() }
@@ -50,7 +49,6 @@ struct ControlSocketTests {
         let lines = [
             #"{"kind":"boundary"}"#,
             #"{"kind":"mute_toggle"}"#,
-            #"{"kind":"ack","paths":["/a.caf","/b.caf"]}"#,
             #"{"kind":"emit","stream":"final","record":{"ts":1.0,"ch":"mic","kind":"final","text":"hi"}}"#
         ].joined(separator: "\n") + "\n"
 
@@ -63,7 +61,6 @@ struct ControlSocketTests {
         let cmds = recorder.commands
         #expect(cmds.contains { $0["kind"] as? String == "boundary" })
         #expect(cmds.contains { $0["kind"] as? String == "mute_toggle" })
-        #expect(cmds.contains { ($0["kind"] as? String == "ack") && (($0["paths"] as? [String]) == ["/a.caf", "/b.caf"]) })
 
         // emit re-emission lands on the emitter as stream:"final"
         let finals = emitter.filter(stream: "final")
@@ -81,7 +78,7 @@ struct ControlSocketTests {
         #expect(FileManager.default.fileExists(atPath: tmp.path))
         let socket = try ControlSocket(socketPath: tmp.path)
         try socket.start(
-            onBoundary: {}, onMuteToggle: {}, onAck: { _ in },
+            onBoundary: {}, onMuteToggle: {},
             emitter: CapturingEmitter()
         )
         defer { socket.stop() }

@@ -171,18 +171,6 @@ actor CaptureCoordinator {
         }
     }
 
-    func acknowledgeAndDelete(paths: [String]) {
-        for p in paths {
-            let url = URL(fileURLWithPath: p)
-            try? FileManager.default.removeItem(at: url)
-            emitter.emit(stream: "state", record: [
-                "ts": Date().timeIntervalSince1970,
-                "kind": "deleted",
-                "path": p
-            ])
-        }
-    }
-
     private func rotate(channel: String, recorder: RotatingRecorder, reason: String) async {
         FileHandle.standardError.write("rotate[\(channel)]: finalize begin\n".data(using: .utf8)!)
         let finalized: (path: String, bytes: Int, startedAt: TimeInterval, endedAt: TimeInterval) =

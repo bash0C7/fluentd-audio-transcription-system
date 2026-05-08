@@ -21,7 +21,6 @@ final class ControlSocket: @unchecked Sendable {
     func start(
         onBoundary: @escaping @Sendable () -> Void,
         onMuteToggle: @escaping @Sendable () -> Void,
-        onAck: @escaping @Sendable ([String]) -> Void,
         emitter: RecordEmitter
     ) throws {
         let readySemaphore = DispatchSemaphore(value: 0)
@@ -37,7 +36,6 @@ final class ControlSocket: @unchecked Sendable {
             self?.accept(conn,
                 onBoundary: onBoundary,
                 onMuteToggle: onMuteToggle,
-                onAck: onAck,
                 emitter: emitter)
         }
         listener.start(queue: queue)
@@ -54,7 +52,6 @@ final class ControlSocket: @unchecked Sendable {
         _ conn: NWConnection,
         onBoundary: @escaping @Sendable () -> Void,
         onMuteToggle: @escaping @Sendable () -> Void,
-        onAck: @escaping @Sendable ([String]) -> Void,
         emitter: RecordEmitter
     ) {
         let buffer = Buffer()
@@ -64,7 +61,6 @@ final class ControlSocket: @unchecked Sendable {
                 self?.receive(conn, buffer: buffer,
                               onBoundary: onBoundary,
                               onMuteToggle: onMuteToggle,
-                              onAck: onAck,
                               emitter: emitter)
             case .failed, .cancelled:
                 break
@@ -80,7 +76,6 @@ final class ControlSocket: @unchecked Sendable {
         buffer: Buffer,
         onBoundary: @escaping @Sendable () -> Void,
         onMuteToggle: @escaping @Sendable () -> Void,
-        onAck: @escaping @Sendable ([String]) -> Void,
         emitter: RecordEmitter
     ) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
@@ -90,7 +85,6 @@ final class ControlSocket: @unchecked Sendable {
                     self?.dispatch(line: line,
                                    onBoundary: onBoundary,
                                    onMuteToggle: onMuteToggle,
-                                   onAck: onAck,
                                    emitter: emitter)
                 }
             }
@@ -101,7 +95,6 @@ final class ControlSocket: @unchecked Sendable {
             self?.receive(conn, buffer: buffer,
                           onBoundary: onBoundary,
                           onMuteToggle: onMuteToggle,
-                          onAck: onAck,
                           emitter: emitter)
         }
     }
@@ -110,7 +103,6 @@ final class ControlSocket: @unchecked Sendable {
         line: Data,
         onBoundary: @Sendable () -> Void,
         onMuteToggle: @Sendable () -> Void,
-        onAck: @Sendable ([String]) -> Void,
         emitter: RecordEmitter
     ) {
         guard !line.isEmpty,
@@ -121,8 +113,6 @@ final class ControlSocket: @unchecked Sendable {
             onBoundary()
         case "mute_toggle":
             onMuteToggle()
-        case "ack":
-            if let paths = obj["paths"] as? [String] { onAck(paths) }
         case "emit":
             if let stream = obj["stream"] as? String,
                let record = obj["record"] as? [String: Any] {

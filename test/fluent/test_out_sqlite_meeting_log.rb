@@ -6,7 +6,6 @@ require 'fluent/plugin/out_sqlite_meeting_log'
 require 'tmpdir'
 require 'fileutils'
 require 'sqlite3'
-require 'socket'
 require_relative '../../lib/audio_transcription/migrator'
 
 class TestOutSqliteMeetingLog < Test::Unit::TestCase
@@ -14,24 +13,11 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
     Fluent::Test.setup
     @tmp = Dir.mktmpdir('out-sqlite-')
     @db_path = File.join(@tmp, 'm.sqlite')
-    @sock_path = File.join(@tmp, 'swiftcap.sock')
+    @caf_path = File.join(@tmp, 'mic-1.caf')
     AudioTranscription::Migrator.new(@db_path).run
-    @server = UNIXServer.new(@sock_path)
-    @ack_lines = []
-    @ack_thread = Thread.new do
-      loop do
-        client = @server.accept
-        client.each_line { |l| @ack_lines << l }
-        client.close
-      rescue StandardError
-        break
-      end
-    end
   end
 
   def teardown
-    @server.close rescue nil
-    @ack_thread.kill rescue nil
     FileUtils.remove_entry(@tmp)
   end
 
@@ -39,7 +25,6 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
     Fluent::Test::Driver::Output.new(Fluent::Plugin::SqliteMeetingLogOutput)
       .configure(<<~CONF)
         db_path #{@db_path}
-        swiftcap_socket_path #{@sock_path}
       CONF
   end
 
@@ -112,21 +97,18 @@ class TestOutSqliteMeetingLog < Test::Unit::TestCase
     end
   end
 
-  def test_segment_ack_lands_on_socket
+  def test_segment_unlinks_caf_after_insert
+    File.binwrite(@caf_path, "fakecaf")
     d = create_driver
     d.run(default_tag: 'audio.state') do
       d.feed(Fluent::EventTime.now, {
-        'kind' => 'rotated', 'channel' => 'mic', 'path' => '/spool/mic-1.caf',
+        'kind' => 'rotated', 'channel' => 'mic', 'path' => @caf_path,
         'started_at' => 1.0, 'ended_at' => 2.0,
         'duration_sec' => 1.0, 'codec' => 'aac', 'sample_rate' => 16000,
-        'bytes' => 4, 'blob' => "\x00\x01\x02\x03"
+        'bytes' => 7, 'blob' => "fakecaf"
       })
     end
-    Thread.pass; sleep 0.1
-    assert_equal 1, @ack_lines.size
-    parsed = JSON.parse(@ack_lines.first)
-    assert_equal 'ack', parsed['kind']
-    assert_equal ['/spool/mic-1.caf'], parsed['paths']
+    assert !File.exist?(@caf_path), "CAF should have been deleted by out_sqlite_meeting_log after insert"
   end
 
   def test_session_started_at_creates_distinct_sessions_per_started_at
