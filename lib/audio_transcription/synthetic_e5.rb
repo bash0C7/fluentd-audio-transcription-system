@@ -72,6 +72,10 @@ module AudioTranscription
     def capture_baseline
       @baseline[:cafs] = Dir.glob(File.join(@spool_dir, '*.caf'))
       @baseline[:audio_segments] = count_audio_segments
+      @baseline[:audio_segments_by_channel] = {
+        'mic'    => count_audio_segments_for_channel('mic'),
+        'screen' => count_audio_segments_for_channel('screen')
+      }
       @baseline[:mic_transcripts]    = count_transcripts_with_time(channel: 'mic')
       @baseline[:screen_transcripts] = count_transcripts_with_time(channel: 'screen')
     end
@@ -85,18 +89,22 @@ module AudioTranscription
     end
 
     def verify_l1_swiftcap
-      new_cafs = Dir.glob(File.join(@spool_dir, '*.caf')) - @baseline[:cafs]
-      mics = new_cafs.select { |p| File.basename(p).start_with?('mic-') }
-      screens = new_cafs.select { |p| File.basename(p).start_with?('screen-') }
-      fail!(:L1, 'no new mic-*.caf produced during synthetic run') if mics.empty?
-      fail!(:L1, 'no new screen-*.caf produced during synthetic run') if screens.empty?
-      mics.each do |p|
-        rms = caf_rms(p)
-        fail!(:L1, "mic CAF rms=#{rms} <= silence threshold #{SILENCE_RMS_THRESHOLD} (#{File.basename(p)})") if rms <= SILENCE_RMS_THRESHOLD
-      end
-      screens.each do |p|
-        rms = caf_rms(p)
-        fail!(:L1, "screen CAF rms=#{rms} <= silence threshold #{SILENCE_RMS_THRESHOLD} (#{File.basename(p)})") if rms <= SILENCE_RMS_THRESHOLD
+      with_db do |db|
+        new_segments = db.execute(<<~SQL, [@baseline[:audio_segments]])
+          SELECT id, channel, blob FROM audio_segments WHERE id > ? ORDER BY id ASC
+        SQL
+        mics = new_segments.select { |row| row[1] == 'mic' }
+        screens = new_segments.select { |row| row[1] == 'screen' }
+        fail!(:L1, "no new mic audio_segments rows during synthetic run") if mics.empty?
+        fail!(:L1, "no new screen audio_segments rows during synthetic run") if screens.empty?
+        mics.each do |row|
+          rms = caf_blob_rms(row[2])
+          fail!(:L1, "mic CAF rms=#{rms} <= silence threshold #{SILENCE_RMS_THRESHOLD} (id=#{row[0]})") if rms <= SILENCE_RMS_THRESHOLD
+        end
+        screens.each do |row|
+          rms = caf_blob_rms(row[2])
+          fail!(:L1, "screen CAF rms=#{rms} <= silence threshold #{SILENCE_RMS_THRESHOLD} (id=#{row[0]})") if rms <= SILENCE_RMS_THRESHOLD
+        end
       end
     end
 
@@ -183,6 +191,22 @@ module AudioTranscription
       0
     end
 
+    def count_audio_segments_for_channel(channel)
+      with_db do |db|
+        db.get_first_value(
+          'SELECT COUNT(*) FROM audio_segments WHERE channel=? AND duration_sec > 0.0',
+          [channel]
+        )
+      end
+    rescue SQLite3::SQLException
+      0
+    end
+
+    def count_new_segments_for_channel(channel)
+      baseline = (@baseline[:audio_segments_by_channel] || {})[channel].to_i
+      count_audio_segments_for_channel(channel) - baseline
+    end
+
     # An ack causes swiftcap to delete the CAF. So acked-count for a session is
     # rotated_count minus the number of new CAFs still on disk that haven't been
     # acked yet.
@@ -223,6 +247,17 @@ module AudioTranscription
       Math.sqrt(sumsq.to_f / samples.size).to_i
     ensure
       File.delete(tmp) rescue nil
+    end
+
+    def caf_blob_rms(blob)
+      return 0 if blob.nil? || blob.empty?
+      tmp = File.join(@run_dir, "rms-#{Process.pid}-#{rand(1_000_000)}.caf")
+      begin
+        File.binwrite(tmp, blob)
+        caf_rms(tmp)
+      ensure
+        File.delete(tmp) rescue nil
+      end
     end
 
     def sh(cmd)
