@@ -14,9 +14,10 @@
   <key>WorkingDirectory</key>      <string><%= repo_root %></string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>SPOOL_DIR</key>  <string><%= spool_dir %></string>
-    <key>DB_PATH</key>    <string><%= db_path %></string>
-    <key>WEBHOOK_URL</key><string>http://localhost:9292/_internal/notify</string>
+    <key>SPOOL_DIR</key>     <string><%= spool_dir %></string>
+    <key>DB_PATH</key>       <string><%= db_path %></string>
+    <key>SWIFTCAP_BIN</key>  <string><%= swiftcap_bin %></string>
+    <key>WEBHOOK_URL</key>   <string>http://localhost:9292/_internal/notify</string>
   </dict>
   <key>RunAtLoad</key>     <true/>
   <key>KeepAlive</key>     <true/>

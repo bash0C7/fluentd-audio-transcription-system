@@ -5,6 +5,7 @@ require 'tmpdir'
 require 'fileutils'
 require 'json'
 require 'sqlite3'
+require 'socket'
 require_relative '../../lib/audio_transcription/migrator'
 
 class TestSessionControlRoutes < Test::Unit::TestCase
@@ -14,19 +15,37 @@ class TestSessionControlRoutes < Test::Unit::TestCase
     @tmp = Dir.mktmpdir('session-routes-')
     @db_path = File.join(@tmp, 'meeting_log.sqlite')
     @spool_dir = File.join(@tmp, 'spool')
+    # macOS unix socket path limit is 104 bytes; use /tmp with short name
+    @sock_path = "/tmp/sctest-#{Process.pid}.sock"
     FileUtils.mkdir_p(@spool_dir)
     AudioTranscription::Migrator.new(@db_path).run
+
+    File.delete(@sock_path) if File.exist?(@sock_path)
+    @server = UNIXServer.new(@sock_path)
+    @ctrl_lines = []
+    @ctrl_thread = Thread.new do
+      loop do
+        client = @server.accept
+        client.each_line { |l| @ctrl_lines << l }
+        client.close
+      rescue StandardError
+        break
+      end
+    end
+
     ENV['DB_PATH'] = @db_path
     ENV['SPOOL_DIR'] = @spool_dir
+    ENV['SWIFTCAP_SOCKET_PATH'] = @sock_path
     ENV['SKIP_RETRANSCRIBE_WORKER'] = '1'
     require_relative '../../web/app'
   end
 
   def teardown
+    @server.close rescue nil
+    @ctrl_thread.kill rescue nil
+    File.delete(@sock_path) if File.exist?(@sock_path)
     FileUtils.remove_entry(@tmp)
-    ENV.delete('DB_PATH')
-    ENV.delete('SPOOL_DIR')
-    ENV.delete('SKIP_RETRANSCRIBE_WORKER')
+    %w[DB_PATH SPOOL_DIR SWIFTCAP_SOCKET_PATH SKIP_RETRANSCRIBE_WORKER].each { |k| ENV.delete(k) }
   end
 
   def app
@@ -37,25 +56,20 @@ class TestSessionControlRoutes < Test::Unit::TestCase
     'localhost'
   end
 
-  def control_lines
-    path = File.join(@spool_dir, 'control.jsonl')
-    File.exist?(path) ? File.readlines(path) : []
-  end
-
-  def test_post_boundary_appends_to_control_jsonl
+  def test_post_boundary_writes_kind_to_swiftcap_socket
     post '/api/session/boundary'
     assert_equal 202, last_response.status
-    lines = control_lines
-    assert_equal 1, lines.size
-    parsed = JSON.parse(lines[0])
+    sleep 0.1
+    assert_equal 1, @ctrl_lines.size
+    parsed = JSON.parse(@ctrl_lines.first)
     assert_equal 'boundary', parsed['kind']
-    assert parsed['ts'].is_a?(Float)
   end
 
-  def test_post_mute_appends_to_control_jsonl
+  def test_post_mute_writes_mute_toggle_to_swiftcap_socket
     post '/api/session/mute'
     assert_equal 202, last_response.status
-    parsed = JSON.parse(control_lines[0])
+    sleep 0.1
+    parsed = JSON.parse(@ctrl_lines.first)
     assert_equal 'mute_toggle', parsed['kind']
   end
 

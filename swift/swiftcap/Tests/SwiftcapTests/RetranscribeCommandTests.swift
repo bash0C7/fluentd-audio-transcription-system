@@ -30,39 +30,40 @@ struct RetranscribeCommandTests {
         #expect(res?.locale.identifier == "ja-JP")
     }
 
-    @Test func runForFixtureWritesFinalJsonlPass2() async throws {
+    @Test func runForFixtureEmitsFinalAndRetranscribeDoneViaSocket() async throws {
         guard #available(macOS 26.0, *) else { return }
-        // Repo root → test/fixtures/synthetic_e5_audio.aiff
         let here = URL(fileURLWithPath: #filePath)
-        // #filePath = .../fluentd-audio-transcription-system/swift/swiftcap/Tests/SwiftcapTests/RetranscribeCommandTests.swift
-        // 5 x deletingLastPathComponent → fluentd-audio-transcription-system/ (repo root)
         let repoRoot = here
-            .deletingLastPathComponent()  // removes RetranscribeCommandTests.swift → SwiftcapTests/
-            .deletingLastPathComponent()  // SwiftcapTests → Tests/
-            .deletingLastPathComponent()  // Tests → swiftcap/
-            .deletingLastPathComponent()  // swiftcap → swift/
-            .deletingLastPathComponent()  // swift → repo root
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
         let fixture = repoRoot.appendingPathComponent("test/fixtures/synthetic_e5_audio.aiff")
-        guard FileManager.default.fileExists(atPath: fixture.path) else {
-            // If the fixture isn't there, skip rather than fail.
-            // (the test environment may not have the AIFF file)
-            return
+        guard FileManager.default.fileExists(atPath: fixture.path) else { return }
+
+        let sockPath = NSString(string: "/tmp/retr-\(UUID().uuidString).sock").expandingTildeInPath
+        defer { try? FileManager.default.removeItem(atPath: sockPath) }
+
+        let captured = CapturingEmitter()
+        let socket = try ControlSocket(socketPath: sockPath)
+        try socket.start(
+            onBoundary: {}, onMuteToggle: {},
+            emitter: captured
+        )
+        defer { socket.stop() }
+        for _ in 0..<50 {
+            if FileManager.default.fileExists(atPath: sockPath) { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("retr-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let cmd = RetranscribeCommand(sessionId: 1,
-                                      locale: Locale(identifier: "ja-JP"),
-                                      pass: 2)
-        try await cmd.runForFixture(audioFiles: [fixture], spoolDir: tmp)
+        let cmd = RetranscribeCommand(sessionId: 1, locale: Locale(identifier: "ja-JP"), pass: 2)
+        try await cmd.runForFixture(audioFiles: [fixture], socketPath: sockPath)
 
-        let final = (try? String(contentsOf: tmp.appendingPathComponent("final.jsonl"), encoding: .utf8)) ?? ""
-        // We expect at least one final.jsonl line tagged pass=2
-        #expect(final.contains("\"pass\":2"))
-        #expect(final.contains("\"kind\":\"final\""))
-        let state = (try? String(contentsOf: tmp.appendingPathComponent("state.jsonl"), encoding: .utf8)) ?? ""
-        #expect(state.contains("\"kind\":\"retranscribe_done\""))
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let finals = captured.filter(stream: "final")
+        #expect(finals.contains { ($0["pass"] as? Int) == 2 && ($0["kind"] as? String) == "final" })
+        let states = captured.filter(stream: "state")
+        #expect(states.contains { $0["kind"] as? String == "retranscribe_done" })
     }
 }

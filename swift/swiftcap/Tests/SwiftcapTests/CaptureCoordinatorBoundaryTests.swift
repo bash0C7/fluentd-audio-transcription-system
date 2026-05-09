@@ -11,17 +11,14 @@ struct CaptureCoordinatorBoundaryTests {
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         let tracker = SessionTracker(now: 1000.0)
-        let coord = CaptureCoordinator(spoolDir: tmp, sessions: tracker)
+        let emitter = CapturingEmitter()
+        let coord = CaptureCoordinator(spoolDir: tmp, emitter: emitter, sessions: tracker)
         await coord.handleBoundary(now: 2000.0)
         let next = await tracker.currentSessionStartedAt
         #expect(next == 2000.0)
-        let stateRaw = (try? String(contentsOf: tmp.appendingPathComponent("state.jsonl"), encoding: .utf8)) ?? ""
-        let lines = stateRaw.split(separator: "\n").map(String.init)
-        let finalized = lines.first { $0.contains("session_finalized") }
-        #expect(finalized != nil)
-        #expect(finalized?.contains("\"session_started_at\":1000") == true)
-        let started = lines.first { $0.contains("session_started") && $0.contains("\"session_started_at\":2000") }
-        #expect(started != nil)
+        let states = emitter.filter(stream: "state")
+        #expect(states.contains { ($0["kind"] as? String) == "session_finalized" && ($0["session_started_at"] as? Double) == 1000.0 })
+        #expect(states.contains { ($0["kind"] as? String) == "session_started" && ($0["session_started_at"] as? Double) == 2000.0 })
     }
 
     @Test func handleMuteToggleFlipsAndEmitsEvent() async throws {
@@ -31,14 +28,15 @@ struct CaptureCoordinatorBoundaryTests {
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         let tracker = SessionTracker(now: 1000.0)
-        let coord = CaptureCoordinator(spoolDir: tmp, sessions: tracker)
+        let emitter = CapturingEmitter()
+        let coord = CaptureCoordinator(spoolDir: tmp, emitter: emitter, sessions: tracker)
         await coord.handleMuteToggle()
         let muted1 = await tracker.isMicMuted
         #expect(muted1)
         await coord.handleMuteToggle()
         let muted2 = await tracker.isMicMuted
         #expect(!muted2)
-        let raw = (try? String(contentsOf: tmp.appendingPathComponent("state.jsonl"), encoding: .utf8)) ?? ""
-        #expect(raw.contains("\"kind\":\"mute_changed\""))
+        let states = emitter.filter(stream: "state")
+        #expect(states.contains { ($0["kind"] as? String) == "mute_changed" })
     }
 }

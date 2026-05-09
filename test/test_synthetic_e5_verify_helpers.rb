@@ -31,8 +31,7 @@ class TestSyntheticE5VerifyHelpers < Test::Unit::TestCase
     @e5 = AudioTranscription::SyntheticE5.new(repo_root: @tmp)
     @e5.instance_variable_set(:@baseline, {
       cafs: [],
-      rotated_count: 0,
-      ack_count: 0,
+      audio_segments: 0,
       mic_transcripts: 0,
       screen_transcripts: 0
     })
